@@ -52,7 +52,6 @@ pub(crate) static PROP_SHADOW_OFFSET_Y: &[u8] = b"Shadow offset Y\0";
 pub(crate) static PROP_SHADOW_COLOR: &[u8] = b"Shadow color\0";
 
 pub(crate) static GROUP_SEGMENTATION: &[u8] = b"group_segmentation\0";
-pub(crate) static GROUP_TIMING: &[u8] = b"group_timing\0";
 pub(crate) static GROUP_BACKGROUND: &[u8] = b"group_background\0";
 pub(crate) static GROUP_SHAPE: &[u8] = b"group_shape\0";
 pub(crate) static GROUP_BORDER: &[u8] = b"group_border\0";
@@ -60,7 +59,6 @@ pub(crate) static GROUP_SHADOW: &[u8] = b"group_shadow\0";
 pub(crate) static GROUP_DEBUG: &[u8] = b"group_debug\0";
 
 pub(crate) static GROUP_LABEL_SEGMENTATION: &[u8] = b"Segmentation\0";
-pub(crate) static GROUP_LABEL_TIMING: &[u8] = b"Timing\0";
 pub(crate) static GROUP_LABEL_BACKGROUND: &[u8] = b"Background\0";
 pub(crate) static GROUP_LABEL_SHAPE: &[u8] = b"Shape\0";
 pub(crate) static GROUP_LABEL_BORDER: &[u8] = b"Border\0";

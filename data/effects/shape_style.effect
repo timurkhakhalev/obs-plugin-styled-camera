@@ -4,7 +4,8 @@
 //   0 = circle (inscribed)
 //   1 = rectangle (full)
 //   2 = rounded rectangle (full; uses corner_radius)
-//   3 = square (inscribed)
+//   3 = square (inscribed; uses corner_radius)
+//   4 = vertical rectangle (inscribed; 9:16 aspect; uses corner_radius)
 //
 // Inputs:
 //   image            - composited camera texture
@@ -80,15 +81,35 @@ float ShapeSDF(float2 p, float2 half_size)
 {
 	// Inscribed radius for circle/square.
 	float r = min(half_size.x, half_size.y);
-	float rr_full = min(max(corner_radius, 0.0), r);
+
+	// Default box size for rectangle/rounded rectangle is full.
+	float2 box_half = half_size;
+
+	// Vertical rectangle: inscribed 9:16.
+	if (shape_type > 3.5) {
+		const float ar = 9.0 / 16.0; // width / height
+		float cur_ar = half_size.x / max(half_size.y, 0.001);
+		if (cur_ar > ar) {
+			// Too wide: limit width.
+			box_half = float2(half_size.y * ar, half_size.y);
+		} else {
+			// Too tall: limit height.
+			box_half = float2(half_size.x, half_size.x / ar);
+		}
+	}
+
+	float rr_box = min(max(corner_radius, 0.0), min(box_half.x, box_half.y));
+	float rr_square = min(max(corner_radius, 0.0), r);
 
 	if (shape_type < 0.5)
 		return sdCircle(p, r);
-	if (shape_type > 2.5)
-		return sdBox(p, float2(r, r));
+	if (shape_type > 2.5 && shape_type < 3.5)
+		return sdRoundBox(p, float2(r, r), rr_square);
 	if (shape_type > 1.5 && shape_type < 2.5)
-		return sdRoundBox(p, half_size, rr_full);
-	return sdBox(p, half_size);
+		return sdRoundBox(p, box_half, rr_box);
+	if (shape_type > 3.5)
+		return sdRoundBox(p, box_half, rr_box);
+	return sdBox(p, box_half);
 }
 
 float AlphaFromSDF(float dist, float aa)
