@@ -12,6 +12,10 @@ crate-type = ["cdylib"]
 test = false
 doctest = false
 
+[features]
+default = []
+perf = []
+
 [dependencies]
 obs-sys = { path = "../obs-sys" }
 styledcamera-core = { path = "../styledcamera-core" }

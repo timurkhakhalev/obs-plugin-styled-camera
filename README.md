@@ -40,6 +40,10 @@ Unit tests live in `styledcamera-core`:
 cargo test
 ```
 
+## Profiling
+
+See `PROFILING.md`.
+
 ## Packaging / install
 
 See `PACKAGING.md`.

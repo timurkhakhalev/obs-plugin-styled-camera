@@ -12,6 +12,7 @@ use crate::graphics::{
     draw_shape_to_screen, render_effect_to_texrender, render_source_to_texrender, set_float_param,
     set_vec2_param, GraphicsState,
 };
+use crate::perf::RenderPerf;
 use crate::segmentation::{SegInput, SegmentationState, SegOutput};
 use crate::settings::{self, FilterSettings};
 use crate::util::cstr;
@@ -27,6 +28,7 @@ struct StyledCameraFilter {
     mask_latency_ema_ms: f32,
     last_mask_request: Option<Instant>,
 
+    perf: RenderPerf,
     graphics: GraphicsState,
     segmentation: SegmentationState,
     frame_history: FrameHistory,
@@ -41,6 +43,7 @@ impl StyledCameraFilter {
             mask_latency_ema_ms: 0.0,
             last_mask_request: None,
 
+            perf: RenderPerf::new(),
             graphics: GraphicsState::default(),
             segmentation: SegmentationState::default(),
             frame_history: FrameHistory::default(),
@@ -353,7 +356,9 @@ unsafe extern "C" fn styled_camera_filter_create(
     filter.settings = FilterSettings::load(settings_data);
 
     filter.graphics.init();
-    filter.segmentation.ensure_running();
+    if filter.settings.needs_segmentation() {
+        filter.segmentation.ensure_running();
+    }
 
     Box::into_raw(filter).cast()
 }
@@ -372,7 +377,21 @@ unsafe extern "C" fn styled_camera_filter_update(data: *mut c_void, settings_dat
         return;
     }
     let filter = &mut *data.cast::<StyledCameraFilter>();
+    let old_needs_segmentation = filter.settings.needs_segmentation();
     filter.settings = FilterSettings::load(settings_data);
+    let new_needs_segmentation = filter.settings.needs_segmentation();
+
+    if new_needs_segmentation && filter.segmentation.inbox.is_none() {
+        filter.segmentation.ensure_running();
+    } else if old_needs_segmentation && !new_needs_segmentation {
+        filter.segmentation.stop();
+        filter.mask_latency_ema_ms = 0.0;
+        filter.last_mask_request = None;
+
+        obs::obs_enter_graphics();
+        filter.frame_history.destroy();
+        obs::obs_leave_graphics();
+    }
 }
 
 unsafe extern "C" fn styled_camera_filter_get_defaults(settings_data: *mut obs::obs_data_t) {
@@ -407,38 +426,48 @@ unsafe extern "C" fn styled_camera_filter_video_render(data: *mut c_void, _effec
         return;
     }
 
-    filter.segmentation.ensure_running();
-
     let settings = filter.settings;
+    let needs_segmentation = settings.needs_segmentation();
+    let needs_background_composite = settings.needs_background_composite();
     let blur_amount = settings.blur_intensity.clamp(0.0, 1.0);
+
+    if needs_segmentation {
+        filter.segmentation.ensure_running();
+    }
+
+    let t_frame = filter.perf.start();
 
     obs::obs_enter_graphics();
 
-    consume_segmentation_outputs(filter);
+    if needs_segmentation {
+        let t = filter.perf.start();
+        consume_segmentation_outputs(filter);
+        filter.perf.record_consume_outputs(t);
 
-    // Render source into current history slot (used both for segmentation capture and as delay buffer).
-    filter.frame_history.ensure_allocated();
-    let frame_time = Instant::now();
-    let mut tex_current: *mut obs::gs_texture_t = std::ptr::null_mut();
-    if let Some(entry) = filter.frame_history.next_slot_mut() {
-        if !entry.tex.is_null() && render_source_to_texrender(entry.tex, cx, cy, target) {
-            entry.time = Some(frame_time);
-            tex_current = obs::gs_texrender_get_texture(entry.tex);
+        // Render source into current history slot (used both for segmentation capture and as delay buffer).
+        filter.frame_history.ensure_allocated();
+        let frame_time = Instant::now();
+        let mut tex_current: *mut obs::gs_texture_t = std::ptr::null_mut();
+        if let Some(entry) = filter.frame_history.next_slot_mut() {
+            let t = filter.perf.start();
+            let ok = !entry.tex.is_null() && render_source_to_texrender(entry.tex, cx, cy, target);
+            filter.perf.record_render_source(t);
+            if ok {
+                entry.time = Some(frame_time);
+                tex_current = obs::gs_texrender_get_texture(entry.tex);
+            }
         }
-    }
 
-    if !tex_current.is_null() {
-        let delay_ms = (filter.mask_latency_ema_ms.max(0.0)
-            + settings.sync_video_extra_delay_ms.max(0.0))
-        .clamp(0.0, 500.0);
-        let tex_for_comp = filter.frame_history.select_delayed_texture(tex_current, delay_ms);
+        if !tex_current.is_null() {
+            let delay_ms =
+                (filter.mask_latency_ema_ms.max(0.0) + settings.sync_video_extra_delay_ms.max(0.0))
+                    .clamp(0.0, 500.0);
+            let tex_for_comp = filter.frame_history.select_delayed_texture(tex_current, delay_ms);
 
-        maybe_request_segmentation(filter, settings, tex_current, cx, cy, frame_time);
+            let t = filter.perf.start();
+            maybe_request_segmentation(filter, settings, tex_current, cx, cy, frame_time);
+            filter.perf.record_seg_request(t);
 
-        let blur_tex = render_blur(&mut filter.graphics, tex_for_comp, cx, cy, blur_amount);
-        if let Some(tex_comp) =
-            render_composite(&mut filter.graphics, settings, tex_for_comp, blur_tex, cx, cy)
-        {
             if settings.debug_show_mask && !filter.graphics.mask_tex.is_null() {
                 let effect = obs::obs_get_base_effect(obs::obs_base_effect_OBS_EFFECT_DEFAULT);
                 let image_param = obs::gs_effect_get_param_by_name(effect, cstr(b"image\0"));
@@ -447,15 +476,62 @@ unsafe extern "C" fn styled_camera_filter_video_render(data: *mut c_void, _effec
                     obs::gs_draw_sprite(filter.graphics.mask_tex, 0, cx, cy);
                 }
                 obs::obs_leave_graphics();
+                filter.perf.record_frame(t_frame);
                 return;
             }
 
-            draw_shape_to_screen(&filter.graphics, &settings, tex_comp, cx, cy);
+            let tex_out = if needs_background_composite {
+                let t = filter.perf.start();
+                let blur_tex = render_blur(&mut filter.graphics, tex_for_comp, cx, cy, blur_amount);
+                filter.perf.record_blur(t);
+
+                let t = filter.perf.start();
+                let res = render_composite(&mut filter.graphics, settings, tex_for_comp, blur_tex, cx, cy);
+                filter.perf.record_composite(t);
+                let Some(tex_comp) = res else {
+                    obs::obs_leave_graphics();
+                    filter.perf.record_frame(t_frame);
+                    obs::obs_source_skip_video_filter(filter.source);
+                    return;
+                };
+                tex_comp
+            } else {
+                tex_for_comp
+            };
+
+            if !tex_out.is_null() {
+                let t = filter.perf.start();
+                draw_shape_to_screen(&filter.graphics, &settings, tex_out, cx, cy);
+                filter.perf.record_shape(t);
+                obs::obs_leave_graphics();
+                filter.perf.record_frame(t_frame);
+                return;
+            }
+        }
+
+        obs::obs_leave_graphics();
+        filter.perf.record_frame(t_frame);
+        obs::obs_source_skip_video_filter(filter.source);
+        return;
+    }
+
+    // Fast path: no segmentation or background composite needed.
+    let t = filter.perf.start();
+    let ok = render_source_to_texrender(filter.graphics.tex_comp, cx, cy, target);
+    filter.perf.record_render_source(t);
+    if ok {
+        let tex = obs::gs_texrender_get_texture(filter.graphics.tex_comp);
+        if !tex.is_null() {
+            let t = filter.perf.start();
+            draw_shape_to_screen(&filter.graphics, &settings, tex, cx, cy);
+            filter.perf.record_shape(t);
             obs::obs_leave_graphics();
+            filter.perf.record_frame(t_frame);
             return;
         }
     }
 
     obs::obs_leave_graphics();
+    filter.perf.record_frame(t_frame);
     obs::obs_source_skip_video_filter(filter.source);
 }

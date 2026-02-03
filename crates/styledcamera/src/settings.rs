@@ -97,6 +97,17 @@ impl Default for FilterSettings {
 }
 
 impl FilterSettings {
+    pub(crate) fn needs_segmentation(&self) -> bool {
+        self.debug_show_mask
+            || self.blur_intensity > 0.0001
+            || self.bg_dim > 0.0001
+            || self.bg_desat > 0.0001
+    }
+
+    pub(crate) fn needs_background_composite(&self) -> bool {
+        self.blur_intensity > 0.0001 || self.bg_dim > 0.0001 || self.bg_desat > 0.0001
+    }
+
     pub(crate) unsafe fn load(settings: *mut obs::obs_data_t) -> Self {
         if settings.is_null() {
             return Self::default();

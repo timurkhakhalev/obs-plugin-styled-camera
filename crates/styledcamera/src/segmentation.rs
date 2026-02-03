@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use obs_sys as obs;
 
 use crate::constants::MODEL_FILE;
+use crate::perf::SegPerf;
 use crate::util::cstr;
 
 pub(crate) struct SegInput {
@@ -156,6 +157,8 @@ fn segmentation_thread_main(
     dylib_path: PathBuf,
     model_path: PathBuf,
 ) {
+    let mut perf = SegPerf::new();
+
     unsafe {
         if let Ok(p) = CString::new(dylib_path.to_string_lossy().as_bytes()) {
             obs::blog(
@@ -205,6 +208,8 @@ fn segmentation_thread_main(
     let mut last_infer_error_log: Option<Instant> = None;
 
     while let Some(input) = inbox.pop_latest_blocking() {
+        let t_total = perf.start();
+
         let w = input.width as usize;
         let h = input.height as usize;
         if w == 0 || h == 0 || input.rgba.len() != w * h * 4 {
@@ -236,6 +241,7 @@ fn segmentation_thread_main(
         let picked = match input_is_nchw {
             Some(true) => {
                 // Build NCHW directly.
+                let t_pre = perf.start();
                 let mut rgb = vec![0f32; wh * 3];
                 for (i, px) in input.rgba.chunks_exact(4).enumerate() {
                     let r = px[0] as f32 * inv_255;
@@ -245,45 +251,65 @@ fn segmentation_thread_main(
                     rgb[wh + i] = g;
                     rgb[wh * 2 + i] = b;
                 }
-                run_and_pick_output(vec![1i64, 3, h as i64, w as i64], rgb.into_boxed_slice())
+                perf.record_preprocess(t_pre);
+
+                let t_infer = perf.start();
+                let res = run_and_pick_output(vec![1i64, 3, h as i64, w as i64], rgb.into_boxed_slice());
+                perf.record_infer(t_infer);
+                res
             }
             Some(false) => {
                 // Build NHWC directly.
+                let t_pre = perf.start();
                 let mut rgb = Vec::<f32>::with_capacity(wh * 3);
                 for px in input.rgba.chunks_exact(4) {
                     rgb.push(px[0] as f32 * inv_255);
                     rgb.push(px[1] as f32 * inv_255);
                     rgb.push(px[2] as f32 * inv_255);
                 }
-                run_and_pick_output(vec![1i64, h as i64, w as i64, 3], rgb.into_boxed_slice())
+                perf.record_preprocess(t_pre);
+
+                let t_infer = perf.start();
+                let res = run_and_pick_output(vec![1i64, h as i64, w as i64, 3], rgb.into_boxed_slice());
+                perf.record_infer(t_infer);
+                res
             }
             None => {
                 // Auto-detect layout once using NHWC input first (cheap to assemble from RGBA).
+                let t_pre = perf.start();
                 let mut rgb_nhwc = Vec::<f32>::with_capacity(wh * 3);
                 for px in input.rgba.chunks_exact(4) {
                     rgb_nhwc.push(px[0] as f32 * inv_255);
                     rgb_nhwc.push(px[1] as f32 * inv_255);
                     rgb_nhwc.push(px[2] as f32 * inv_255);
                 }
+                perf.record_preprocess(t_pre);
 
+                let t_infer = perf.start();
                 let nhwc = run_and_pick_output(
                     vec![1i64, h as i64, w as i64, 3],
                     rgb_nhwc.clone().into_boxed_slice(),
                 );
+                perf.record_infer(t_infer);
                 if nhwc.is_some() {
                     input_is_nchw = Some(false);
                     nhwc
                 } else {
+                    let t_pre = perf.start();
                     let mut rgb_nchw = vec![0f32; wh * 3];
                     for i in 0..wh {
                         rgb_nchw[i] = rgb_nhwc[i * 3];
                         rgb_nchw[wh + i] = rgb_nhwc[i * 3 + 1];
                         rgb_nchw[wh * 2 + i] = rgb_nhwc[i * 3 + 2];
                     }
+                    perf.record_preprocess(t_pre);
+
+                    let t_infer = perf.start();
                     let nchw = run_and_pick_output(
                         vec![1i64, 3, h as i64, w as i64],
                         rgb_nchw.into_boxed_slice(),
                     );
+                    perf.record_infer(t_infer);
                     if nchw.is_some() {
                         input_is_nchw = Some(true);
                     }
@@ -309,6 +335,7 @@ fn segmentation_thread_main(
             continue;
         };
 
+        let t_post = perf.start();
         let Some(mask_u8) = styledcamera_core::segmentation::postprocess_mask_u8(
             expected,
             &out_shape,
@@ -318,6 +345,7 @@ fn segmentation_thread_main(
         ) else {
             continue;
         };
+        perf.record_postprocess(t_post);
 
         let _ = tx.try_send(SegOutput {
             mask: mask_u8,
@@ -325,6 +353,8 @@ fn segmentation_thread_main(
             height: input.height,
             capture_time: input.capture_time,
         });
+
+        perf.record_total(t_total);
     }
 }
 
