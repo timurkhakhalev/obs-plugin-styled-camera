@@ -16,6 +16,7 @@
 //   feather          - edge AA / feather in px (>= 0; 1 is a good default)
 //   border_thickness - border thickness in px
 //   border_color     - RGBA
+//   inset            - inner padding in px: (left, top, right, bottom)
 //   shadow_offset    - shadow offset in px (x right, y down)
 //   shadow_blur      - shadow softness in px
 //   shadow_color     - RGBA
@@ -29,6 +30,7 @@ uniform float corner_radius;
 uniform float feather;
 uniform float border_thickness;
 uniform float4 border_color;
+uniform float4 inset;
 uniform float2 shadow_offset;
 uniform float shadow_blur;
 uniform float4 shadow_color;
@@ -78,13 +80,14 @@ float ShapeSDF(float2 p, float2 half_size)
 {
 	// Inscribed radius for circle/square.
 	float r = min(half_size.x, half_size.y);
+	float rr_full = min(max(corner_radius, 0.0), r);
 
 	if (shape_type < 0.5)
 		return sdCircle(p, r);
 	if (shape_type > 2.5)
 		return sdBox(p, float2(r, r));
 	if (shape_type > 1.5 && shape_type < 2.5)
-		return sdRoundBox(p, half_size, max(corner_radius, 0.0));
+		return sdRoundBox(p, half_size, rr_full);
 	return sdBox(p, half_size);
 }
 
@@ -94,23 +97,28 @@ float AlphaFromSDF(float dist, float aa)
 	return smoothstep(aa * 0.5, -aa * 0.5, dist);
 }
 
-float4 Over(float4 dst, float4 src)
+float4 OverPM(float4 dst, float4 src)
 {
-	float outA = src.a + dst.a * (1.0 - src.a);
-	float denom = max(outA, 1e-6);
-	float3 outRGB = (src.rgb * src.a + dst.rgb * dst.a * (1.0 - src.a)) / denom;
-	return float4(outRGB, outA);
+	// Premultiplied alpha "over": assumes src.rgb and dst.rgb are already multiplied by their alpha.
+	return src + dst * (1.0 - src.a);
 }
 
 float4 PSShapeStyle(VertOut v_in) : TARGET
 {
 	float2 safe_size = max(size, float2(1.0, 1.0));
-	float2 half_size = safe_size * 0.5;
+	float2 inner_size = safe_size - float2(inset.x + inset.z, inset.y + inset.w);
+	inner_size = max(inner_size, float2(1.0, 1.0));
+	float2 half_size = inner_size * 0.5;
 
-	// Pixel space centered at (0,0): [-w/2..w/2], [-h/2..h/2]
+	// Pixel space (full frame) centered at (0,0): [-w/2..w/2], [-h/2..h/2]
+	// We keep `p` in full-frame pixel units, but evaluate SDF using `inner_size` so the shape is inset.
+	// `uv_img` keeps aspect ratio by applying a *uniform* scale (no stretching).
 	float2 p = (v_in.uv - 0.5) * safe_size;
+	float2 scale2 = safe_size / inner_size;
+	float s = max(scale2.x, scale2.y);
+	float2 uv_img = (v_in.uv - 0.5) * s + 0.5;
 
-	float aa = max(feather, 1.0);
+	float aa = max(feather, 0.001);
 	float bt = max(border_thickness, 0.0);
 
 	float dist = ShapeSDF(p, half_size);
@@ -124,7 +132,7 @@ float4 PSShapeStyle(VertOut v_in) : TARGET
 	// Shadow: shifted copy of the shape, softened outside the edge.
 	float2 sp = p - shadow_offset;
 	float sdist = ShapeSDF(sp, half_size);
-	float sblur = max(shadow_blur, 1.0);
+	float sblur = max(shadow_blur, 0.001);
 	float shadow_a = saturate(1.0 - smoothstep(0.0, sblur, sdist));
 	shadow_a *= (1.0 - shape_a);
 	shadow_a *= shadow_color.a;
@@ -132,16 +140,16 @@ float4 PSShapeStyle(VertOut v_in) : TARGET
 	float4 outc = float4(0.0, 0.0, 0.0, 0.0);
 
 	// Shadow (behind).
-	outc = Over(outc, float4(shadow_color.rgb, shadow_a));
+	outc = OverPM(outc, float4(shadow_color.rgb * shadow_a, shadow_a));
 
 	// Content (clipped by shape alpha).
-	float4 img = image.Sample(linear_clamp_sampler, v_in.uv);
+	float4 img = image.Sample(linear_clamp_sampler, uv_img);
 	float content_a = shape_a * img.a;
-	outc = Over(outc, float4(img.rgb, content_a));
+	outc = OverPM(outc, float4(img.rgb * content_a, content_a));
 
 	// Border (on top).
 	float b_a = border_a * border_color.a;
-	outc = Over(outc, float4(border_color.rgb, b_a));
+	outc = OverPM(outc, float4(border_color.rgb * b_a, b_a));
 
 	return outc;
 }

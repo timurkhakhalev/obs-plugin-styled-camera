@@ -31,6 +31,7 @@ static SETTING_CORNER_RADIUS: &[u8] = b"corner_radius\0";
 static SETTING_FEATHER: &[u8] = b"feather\0";
 static SETTING_BORDER_THICKNESS: &[u8] = b"border_thickness\0";
 static SETTING_BORDER_COLOR: &[u8] = b"border_color\0";
+static SETTING_PADDING: &[u8] = b"padding\0";
 static SETTING_SHADOW_OPACITY: &[u8] = b"shadow_opacity\0";
 static SETTING_SHADOW_BLUR: &[u8] = b"shadow_blur\0";
 static SETTING_SHADOW_OFFSET_X: &[u8] = b"shadow_offset_x\0";
@@ -51,11 +52,26 @@ static PROP_CORNER_RADIUS: &[u8] = b"Corner radius\0";
 static PROP_FEATHER: &[u8] = b"Feather\0";
 static PROP_BORDER_THICKNESS: &[u8] = b"Border thickness\0";
 static PROP_BORDER_COLOR: &[u8] = b"Border color\0";
+static PROP_PADDING: &[u8] = b"Padding\0";
 static PROP_SHADOW_OPACITY: &[u8] = b"Shadow opacity\0";
 static PROP_SHADOW_BLUR: &[u8] = b"Shadow blur\0";
 static PROP_SHADOW_OFFSET_X: &[u8] = b"Shadow offset X\0";
 static PROP_SHADOW_OFFSET_Y: &[u8] = b"Shadow offset Y\0";
 static PROP_SHADOW_COLOR: &[u8] = b"Shadow color\0";
+
+static GROUP_SEGMENTATION: &[u8] = b"group_segmentation\0";
+static GROUP_BACKGROUND: &[u8] = b"group_background\0";
+static GROUP_SHAPE: &[u8] = b"group_shape\0";
+static GROUP_BORDER: &[u8] = b"group_border\0";
+static GROUP_SHADOW: &[u8] = b"group_shadow\0";
+static GROUP_DEBUG: &[u8] = b"group_debug\0";
+
+static GROUP_LABEL_SEGMENTATION: &[u8] = b"Segmentation\0";
+static GROUP_LABEL_BACKGROUND: &[u8] = b"Background\0";
+static GROUP_LABEL_SHAPE: &[u8] = b"Shape\0";
+static GROUP_LABEL_BORDER: &[u8] = b"Border\0";
+static GROUP_LABEL_SHADOW: &[u8] = b"Shadow\0";
+static GROUP_LABEL_DEBUG: &[u8] = b"Debug\0";
 
 static EFFECT_BLUR_DOWNSAMPLE: &[u8] = b"blur_downsample.effect\0";
 static EFFECT_BLUR_PASS: &[u8] = b"blur_pass.effect\0";
@@ -87,6 +103,7 @@ struct StyledCameraFilter {
     feather: f32,
     border_thickness: f32,
     border_color_argb: u32,
+    padding: f32,
 
     shadow_opacity: f32,
     shadow_blur: f32,
@@ -122,6 +139,7 @@ struct StyledCameraFilter {
     shape_feather: *mut obs::gs_eparam_t,
     shape_border_thickness: *mut obs::gs_eparam_t,
     shape_border_color: *mut obs::gs_eparam_t,
+    shape_inset: *mut obs::gs_eparam_t,
     shape_shadow_offset: *mut obs::gs_eparam_t,
     shape_shadow_blur: *mut obs::gs_eparam_t,
     shape_shadow_color: *mut obs::gs_eparam_t,
@@ -166,6 +184,7 @@ unsafe fn read_settings(filter: &mut StyledCameraFilter, settings: *mut obs::obs
     filter.feather = obs::obs_data_get_double(settings, cstr(SETTING_FEATHER)) as f32;
     filter.border_thickness = obs::obs_data_get_double(settings, cstr(SETTING_BORDER_THICKNESS)) as f32;
     filter.border_color_argb = obs::obs_data_get_int(settings, cstr(SETTING_BORDER_COLOR)) as u32;
+    filter.padding = obs::obs_data_get_double(settings, cstr(SETTING_PADDING)) as f32;
 
     filter.shadow_opacity = obs::obs_data_get_double(settings, cstr(SETTING_SHADOW_OPACITY)) as f32;
     filter.shadow_blur = obs::obs_data_get_double(settings, cstr(SETTING_SHADOW_BLUR)) as f32;
@@ -261,6 +280,7 @@ unsafe extern "C" fn styled_camera_filter_create(
         feather: 1.5,
         border_thickness: 0.0,
         border_color_argb: 0xFFFFFFFF,
+        padding: 0.0,
 
         shadow_opacity: 0.0,
         shadow_blur: 18.0,
@@ -296,6 +316,7 @@ unsafe extern "C" fn styled_camera_filter_create(
         shape_feather: std::ptr::null_mut(),
         shape_border_thickness: std::ptr::null_mut(),
         shape_border_color: std::ptr::null_mut(),
+        shape_inset: std::ptr::null_mut(),
         shape_shadow_offset: std::ptr::null_mut(),
         shape_shadow_blur: std::ptr::null_mut(),
         shape_shadow_color: std::ptr::null_mut(),
@@ -364,6 +385,7 @@ unsafe extern "C" fn styled_camera_filter_get_defaults(settings: *mut obs::obs_d
     obs::obs_data_set_default_double(settings, cstr(SETTING_FEATHER), 1.5);
     obs::obs_data_set_default_double(settings, cstr(SETTING_BORDER_THICKNESS), 0.0);
     obs::obs_data_set_default_int(settings, cstr(SETTING_BORDER_COLOR), 0xFFFFFFFFu32 as i64);
+    obs::obs_data_set_default_double(settings, cstr(SETTING_PADDING), 0.0);
 
     obs::obs_data_set_default_double(settings, cstr(SETTING_SHADOW_OPACITY), 0.0);
     obs::obs_data_set_default_double(settings, cstr(SETTING_SHADOW_BLUR), 18.0);
@@ -380,157 +402,233 @@ unsafe extern "C" fn styled_camera_filter_get_properties(
         return props;
     }
 
-    let shape_list = obs::obs_properties_add_list(
-        props,
-        cstr(SETTING_SHAPE_TYPE),
-        cstr(PROP_SHAPE_TYPE),
-        obs::obs_combo_type_OBS_COMBO_TYPE_LIST,
-        obs::obs_combo_format_OBS_COMBO_FORMAT_INT,
-    );
-    if !shape_list.is_null() {
-        obs::obs_property_list_add_int(shape_list, cstr(b"Circle\0"), 0);
-        obs::obs_property_list_add_int(shape_list, cstr(b"Rectangle\0"), 1);
-        obs::obs_property_list_add_int(shape_list, cstr(b"Rounded rectangle\0"), 2);
-        obs::obs_property_list_add_int(shape_list, cstr(b"Square\0"), 3);
+    // Segmentation
+    let seg_props = obs::obs_properties_create();
+    if !seg_props.is_null() {
+        obs::obs_properties_add_int_slider(
+            seg_props,
+            cstr(SETTING_MASK_FPS),
+            cstr(PROP_MASK_FPS),
+            1,
+            30,
+            1,
+        );
+        obs::obs_properties_add_float_slider(
+            seg_props,
+            cstr(SETTING_MASK_TEMPORAL),
+            cstr(PROP_MASK_TEMPORAL),
+            0.0,
+            0.95,
+            0.01,
+        );
+        obs::obs_properties_add_float_slider(
+            seg_props,
+            cstr(SETTING_MASK_THRESHOLD),
+            cstr(PROP_MASK_THRESHOLD),
+            0.0,
+            1.0,
+            0.01,
+        );
+        obs::obs_properties_add_float_slider(
+            seg_props,
+            cstr(SETTING_MASK_SOFTNESS),
+            cstr(PROP_MASK_SOFTNESS),
+            0.0,
+            0.5,
+            0.01,
+        );
+        obs::obs_properties_add_bool(seg_props, cstr(SETTING_MASK_INVERT), cstr(PROP_MASK_INVERT));
+
+        obs::obs_properties_add_group(
+            props,
+            cstr(GROUP_SEGMENTATION),
+            cstr(GROUP_LABEL_SEGMENTATION),
+            obs::obs_group_type_OBS_GROUP_NORMAL,
+            seg_props,
+        );
     }
 
-    obs::obs_properties_add_float_slider(
-        props,
-        cstr(SETTING_BLUR_INTENSITY),
-        cstr(PROP_BLUR_INTENSITY),
-        0.0,
-        1.0,
-        0.01,
-    );
+    // Background (blur, dim, desat)
+    let bg_props = obs::obs_properties_create();
+    if !bg_props.is_null() {
+        obs::obs_properties_add_float_slider(
+            bg_props,
+            cstr(SETTING_BLUR_INTENSITY),
+            cstr(PROP_BLUR_INTENSITY),
+            0.0,
+            1.0,
+            0.01,
+        );
+        obs::obs_properties_add_float_slider(
+            bg_props,
+            cstr(SETTING_BG_DIM),
+            cstr(PROP_BG_DIM),
+            0.0,
+            1.0,
+            0.01,
+        );
+        obs::obs_properties_add_float_slider(
+            bg_props,
+            cstr(SETTING_BG_DESAT),
+            cstr(PROP_BG_DESAT),
+            0.0,
+            1.0,
+            0.01,
+        );
 
-    obs::obs_properties_add_int_slider(
-        props,
-        cstr(SETTING_MASK_FPS),
-        cstr(PROP_MASK_FPS),
-        1,
-        30,
-        1,
-    );
+        obs::obs_properties_add_group(
+            props,
+            cstr(GROUP_BACKGROUND),
+            cstr(GROUP_LABEL_BACKGROUND),
+            obs::obs_group_type_OBS_GROUP_NORMAL,
+            bg_props,
+        );
+    }
 
-    obs::obs_properties_add_float_slider(
-        props,
-        cstr(SETTING_MASK_TEMPORAL),
-        cstr(PROP_MASK_TEMPORAL),
-        0.0,
-        0.95,
-        0.01,
-    );
+    // Shape (type + edge + padding)
+    let shape_props = obs::obs_properties_create();
+    if !shape_props.is_null() {
+        let shape_list = obs::obs_properties_add_list(
+            shape_props,
+            cstr(SETTING_SHAPE_TYPE),
+            cstr(PROP_SHAPE_TYPE),
+            obs::obs_combo_type_OBS_COMBO_TYPE_LIST,
+            obs::obs_combo_format_OBS_COMBO_FORMAT_INT,
+        );
+        if !shape_list.is_null() {
+            obs::obs_property_list_add_int(shape_list, cstr(b"Circle\0"), 0);
+            obs::obs_property_list_add_int(shape_list, cstr(b"Rectangle\0"), 1);
+            obs::obs_property_list_add_int(shape_list, cstr(b"Rounded rectangle\0"), 2);
+            obs::obs_property_list_add_int(shape_list, cstr(b"Square\0"), 3);
+        }
 
-    obs::obs_properties_add_float_slider(
-        props,
-        cstr(SETTING_MASK_THRESHOLD),
-        cstr(PROP_MASK_THRESHOLD),
-        0.0,
-        1.0,
-        0.01,
-    );
+        obs::obs_properties_add_float_slider(
+            shape_props,
+            cstr(SETTING_CORNER_RADIUS),
+            cstr(PROP_CORNER_RADIUS),
+            0.0,
+            2000.0,
+            1.0,
+        );
+        obs::obs_properties_add_float_slider(
+            shape_props,
+            cstr(SETTING_FEATHER),
+            cstr(PROP_FEATHER),
+            0.0,
+            32.0,
+            0.1,
+        );
+        obs::obs_properties_add_float_slider(
+            shape_props,
+            cstr(SETTING_PADDING),
+            cstr(PROP_PADDING),
+            0.0,
+            500.0,
+            1.0,
+        );
 
-    obs::obs_properties_add_float_slider(
-        props,
-        cstr(SETTING_MASK_SOFTNESS),
-        cstr(PROP_MASK_SOFTNESS),
-        0.0,
-        0.5,
-        0.01,
-    );
+        obs::obs_properties_add_group(
+            props,
+            cstr(GROUP_SHAPE),
+            cstr(GROUP_LABEL_SHAPE),
+            obs::obs_group_type_OBS_GROUP_NORMAL,
+            shape_props,
+        );
+    }
 
-    obs::obs_properties_add_bool(props, cstr(SETTING_MASK_INVERT), cstr(PROP_MASK_INVERT));
+    // Border
+    let border_props = obs::obs_properties_create();
+    if !border_props.is_null() {
+        obs::obs_properties_add_float_slider(
+            border_props,
+            cstr(SETTING_BORDER_THICKNESS),
+            cstr(PROP_BORDER_THICKNESS),
+            0.0,
+            32.0,
+            0.5,
+        );
+        obs::obs_properties_add_color_alpha(
+            border_props,
+            cstr(SETTING_BORDER_COLOR),
+            cstr(PROP_BORDER_COLOR),
+        );
 
-    obs::obs_properties_add_float_slider(
-        props,
-        cstr(SETTING_BG_DIM),
-        cstr(PROP_BG_DIM),
-        0.0,
-        1.0,
-        0.01,
-    );
+        obs::obs_properties_add_group(
+            props,
+            cstr(GROUP_BORDER),
+            cstr(GROUP_LABEL_BORDER),
+            obs::obs_group_type_OBS_GROUP_NORMAL,
+            border_props,
+        );
+    }
 
-    obs::obs_properties_add_float_slider(
-        props,
-        cstr(SETTING_BG_DESAT),
-        cstr(PROP_BG_DESAT),
-        0.0,
-        1.0,
-        0.01,
-    );
+    // Shadow
+    let shadow_props = obs::obs_properties_create();
+    if !shadow_props.is_null() {
+        obs::obs_properties_add_float_slider(
+            shadow_props,
+            cstr(SETTING_SHADOW_OPACITY),
+            cstr(PROP_SHADOW_OPACITY),
+            0.0,
+            1.0,
+            0.01,
+        );
+        obs::obs_properties_add_float_slider(
+            shadow_props,
+            cstr(SETTING_SHADOW_BLUR),
+            cstr(PROP_SHADOW_BLUR),
+            0.0,
+            64.0,
+            0.5,
+        );
+        obs::obs_properties_add_float_slider(
+            shadow_props,
+            cstr(SETTING_SHADOW_OFFSET_X),
+            cstr(PROP_SHADOW_OFFSET_X),
+            -200.0,
+            200.0,
+            1.0,
+        );
+        obs::obs_properties_add_float_slider(
+            shadow_props,
+            cstr(SETTING_SHADOW_OFFSET_Y),
+            cstr(PROP_SHADOW_OFFSET_Y),
+            -200.0,
+            200.0,
+            1.0,
+        );
+        obs::obs_properties_add_color_alpha(
+            shadow_props,
+            cstr(SETTING_SHADOW_COLOR),
+            cstr(PROP_SHADOW_COLOR),
+        );
 
-    obs::obs_properties_add_float_slider(
-        props,
-        cstr(SETTING_CORNER_RADIUS),
-        cstr(PROP_CORNER_RADIUS),
-        0.0,
-        200.0,
-        1.0,
-    );
+        obs::obs_properties_add_group(
+            props,
+            cstr(GROUP_SHADOW),
+            cstr(GROUP_LABEL_SHADOW),
+            obs::obs_group_type_OBS_GROUP_NORMAL,
+            shadow_props,
+        );
+    }
 
-    obs::obs_properties_add_float_slider(
-        props,
-        cstr(SETTING_FEATHER),
-        cstr(PROP_FEATHER),
-        0.0,
-        32.0,
-        0.1,
-    );
+    // Debug
+    let debug_props = obs::obs_properties_create();
+    if !debug_props.is_null() {
+        obs::obs_properties_add_bool(
+            debug_props,
+            cstr(SETTING_DEBUG_SHOW_MASK),
+            cstr(PROP_DEBUG_SHOW_MASK),
+        );
 
-    obs::obs_properties_add_float_slider(
-        props,
-        cstr(SETTING_BORDER_THICKNESS),
-        cstr(PROP_BORDER_THICKNESS),
-        0.0,
-        32.0,
-        0.5,
-    );
-
-    obs::obs_properties_add_color_alpha(props, cstr(SETTING_BORDER_COLOR), cstr(PROP_BORDER_COLOR));
-
-    obs::obs_properties_add_float_slider(
-        props,
-        cstr(SETTING_SHADOW_OPACITY),
-        cstr(PROP_SHADOW_OPACITY),
-        0.0,
-        1.0,
-        0.01,
-    );
-
-    obs::obs_properties_add_float_slider(
-        props,
-        cstr(SETTING_SHADOW_BLUR),
-        cstr(PROP_SHADOW_BLUR),
-        0.0,
-        64.0,
-        0.5,
-    );
-
-    obs::obs_properties_add_float_slider(
-        props,
-        cstr(SETTING_SHADOW_OFFSET_X),
-        cstr(PROP_SHADOW_OFFSET_X),
-        -200.0,
-        200.0,
-        1.0,
-    );
-
-    obs::obs_properties_add_float_slider(
-        props,
-        cstr(SETTING_SHADOW_OFFSET_Y),
-        cstr(PROP_SHADOW_OFFSET_Y),
-        -200.0,
-        200.0,
-        1.0,
-    );
-
-    obs::obs_properties_add_color_alpha(props, cstr(SETTING_SHADOW_COLOR), cstr(PROP_SHADOW_COLOR));
-
-    obs::obs_properties_add_bool(
-        props,
-        cstr(SETTING_DEBUG_SHOW_MASK),
-        cstr(PROP_DEBUG_SHOW_MASK),
-    );
+        obs::obs_properties_add_group(
+            props,
+            cstr(GROUP_DEBUG),
+            cstr(GROUP_LABEL_DEBUG),
+            obs::obs_group_type_OBS_GROUP_NORMAL,
+            debug_props,
+        );
+    }
 
     props
 }
@@ -1100,6 +1198,7 @@ unsafe fn init_graphics(filter: &mut StyledCameraFilter) {
                 obs::gs_effect_get_param_by_name(filter.effect_shape, cstr(b"border_thickness\0"));
             filter.shape_border_color =
                 obs::gs_effect_get_param_by_name(filter.effect_shape, cstr(b"border_color\0"));
+            filter.shape_inset = obs::gs_effect_get_param_by_name(filter.effect_shape, cstr(b"inset\0"));
             filter.shape_shadow_offset =
                 obs::gs_effect_get_param_by_name(filter.effect_shape, cstr(b"shadow_offset\0"));
             filter.shape_shadow_blur =
@@ -1334,8 +1433,13 @@ unsafe fn draw_shape_to_screen(filter: &StyledCameraFilter, tex: *mut obs::gs_te
     set_float_param(filter.shape_border_thickness, filter.border_thickness);
 
     if !filter.shape_border_color.is_null() {
-        let border = argb_to_rgba_vec4(filter.border_color_argb);
+        let border = obs_abgr_to_rgba_vec4(filter.border_color_argb);
         set_vec4_param(filter.shape_border_color, border);
+    }
+
+    if !filter.shape_inset.is_null() {
+        let p = filter.padding.max(0.0);
+        set_vec4_param(filter.shape_inset, [p, p, p, p]);
     }
 
     if !filter.shape_shadow_offset.is_null() {
@@ -1343,7 +1447,7 @@ unsafe fn draw_shape_to_screen(filter: &StyledCameraFilter, tex: *mut obs::gs_te
     }
     set_float_param(filter.shape_shadow_blur, filter.shadow_blur);
     if !filter.shape_shadow_color.is_null() {
-        let mut shadow = argb_to_rgba_vec4(filter.shadow_color_argb);
+        let mut shadow = obs_abgr_to_rgba_vec4(filter.shadow_color_argb);
         shadow[3] *= filter.shadow_opacity.clamp(0.0, 1.0);
         set_vec4_param(filter.shape_shadow_color, shadow);
     }
@@ -1383,11 +1487,12 @@ unsafe fn set_vec4_param(param: *mut obs::gs_eparam_t, v: [f32; 4]) {
     obs::gs_effect_set_val(param, v.as_ptr().cast(), std::mem::size_of_val(&v) as obs::size_t);
 }
 
-unsafe fn argb_to_rgba_vec4(argb: u32) -> [f32; 4] {
-    let a = ((argb >> 24) & 0xFF) as f32 / 255.0;
-    let r = ((argb >> 16) & 0xFF) as f32 / 255.0;
-    let g = ((argb >> 8) & 0xFF) as f32 / 255.0;
-    let b = (argb & 0xFF) as f32 / 255.0;
+unsafe fn obs_abgr_to_rgba_vec4(abgr: u32) -> [f32; 4] {
+    // OBS color properties are stored as 0xAABBGGRR (ABGR).
+    let a = ((abgr >> 24) & 0xFF) as f32 / 255.0;
+    let b = ((abgr >> 16) & 0xFF) as f32 / 255.0;
+    let g = ((abgr >> 8) & 0xFF) as f32 / 255.0;
+    let r = (abgr & 0xFF) as f32 / 255.0;
 
     [r, g, b, a]
 }
