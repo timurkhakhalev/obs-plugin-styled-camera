@@ -100,6 +100,9 @@ fn maybe_link_macos_obs_app() {
       "cargo:warning=obs-sys: OBS.app not found at {} (set OBS_APP_BUNDLE=/path/to/OBS.app to link against an installed OBS).",
       bundle.display()
     );
+    // For OBS plugins, libobs symbols are provided by the host application at runtime.
+    // Allow unresolved references at link time so CI can build without installing OBS.app.
+    println!("cargo:rustc-link-arg=-Wl,-undefined,dynamic_lookup");
     return;
   }
 
@@ -109,6 +112,7 @@ fn maybe_link_macos_obs_app() {
       "cargo:warning=obs-sys: expected Frameworks directory at {} (set OBS_APP_BUNDLE to a valid OBS.app).",
       frameworks_dir.display()
     );
+    println!("cargo:rustc-link-arg=-Wl,-undefined,dynamic_lookup");
     return;
   }
 
@@ -119,6 +123,7 @@ fn maybe_link_macos_obs_app() {
       "cargo:warning=obs-sys: libobs.framework not found in {}. Linking is skipped.",
       frameworks_dir.display()
     );
+    println!("cargo:rustc-link-arg=-Wl,-undefined,dynamic_lookup");
     return;
   }
 

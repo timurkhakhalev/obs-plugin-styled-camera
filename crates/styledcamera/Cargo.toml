@@ -2,6 +2,7 @@
 name = "styledcamera"
 version.workspace = true
 edition.workspace = true
+build = "build.rs"
 publish = false
 license.workspace = true
 description = "OBS Studio video filter plugin (Rust) for background blur + styling"
