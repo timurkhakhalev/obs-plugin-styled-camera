@@ -2,6 +2,9 @@
 name = "styledcamera"
 version = "0.1.0"
 edition = "2021"
+publish = false
+license = "GPL-2.0-or-later"
+description = "OBS Studio video filter plugin (Rust) for background blur + styling"
 
 [lib]
 crate-type = ["cdylib"]
