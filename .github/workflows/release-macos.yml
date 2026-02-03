@@ -35,7 +35,21 @@ jobs:
         run: |
           set -euo pipefail
 
-          cargo_version="$(cargo metadata --no-deps --format-version 1 | /usr/bin/python3 -c 'import json,sys; data=json.load(sys.stdin); pkgs=data.get(\"packages\",[]); v=next((p.get(\"version\") for p in pkgs if p.get(\"name\")==\"styledcamera\"), None); assert v, \"crate not found: styledcamera\"; print(v)')"
+          cargo_version="$(cargo metadata --no-deps --format-version 1 | python3 - <<'PY'
+import json
+import sys
+
+data = json.load(sys.stdin)
+for pkg in data.get("packages", []):
+  if pkg.get("name") == "styledcamera":
+    version = pkg.get("version") or ""
+    if not version:
+      raise SystemExit("styledcamera: empty version field")
+    print(version)
+    raise SystemExit(0)
+raise SystemExit("crate not found: styledcamera")
+PY
+)"
 
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             tag="${GITHUB_REF_NAME}"
