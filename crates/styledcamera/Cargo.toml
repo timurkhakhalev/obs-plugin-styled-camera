@@ -5,7 +5,10 @@ edition = "2021"
 
 [lib]
 crate-type = ["cdylib"]
+test = false
+doctest = false
 
 [dependencies]
 obs-sys = { path = "../obs-sys" }
+styledcamera-core = { path = "../styledcamera-core" }
 ort = { version = "2.0.0-rc.11", default-features = false, features = ["load-dynamic"] }

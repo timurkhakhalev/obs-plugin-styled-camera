@@ -337,7 +337,12 @@ version = "0.1.0"
 dependencies = [
  "obs-sys",
  "ort",
+ "styledcamera-core",
 ]
+
+[[package]]
+name = "styledcamera-core"
+version = "0.1.0"
 
 [[package]]
 name = "syn"
