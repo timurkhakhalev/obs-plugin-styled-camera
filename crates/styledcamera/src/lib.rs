@@ -1,6 +1,7 @@
 #![allow(clippy::missing_safety_doc)]
 
 use std::ffi::c_void;
+use std::ffi::CString;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::path::PathBuf;
@@ -684,7 +685,8 @@ unsafe extern "C" fn styled_camera_filter_video_render(
                     obs::gs_texture_destroy(filter.mask_tex);
                     filter.mask_tex = std::ptr::null_mut();
                 }
-                let init = vec![255u8; (out.width * out.height) as usize];
+                // Default to 0 (no person) until we receive real mask data.
+                let init = vec![0u8; (out.width * out.height) as usize];
                 let mut data_ptrs = [init.as_ptr()];
                 filter.mask_tex = obs::gs_texture_create(
                     out.width,
@@ -746,13 +748,28 @@ unsafe extern "C" fn styled_camera_filter_video_render(
                                 }
                                 obs::gs_stagesurface_unmap(filter.stage_seg);
 
-                                let _ = tx.try_send(Some(SegInput {
+                                let msg = Some(SegInput {
                                     rgba,
                                     width: seg_cx,
                                     height: seg_cy,
                                     temporal_smoothing: filter.mask_temporal_smoothing,
-                                }));
-                                filter.last_mask_request = Some(now);
+                                });
+                                match tx.try_send(msg) {
+                                    Ok(()) => {
+                                        filter.last_mask_request = Some(now);
+                                    }
+                                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                                        // Segmentation thread died; clear and allow restart next frame.
+                                        filter.seg_tx.take();
+                                        filter.seg_rx.take();
+                                        if let Some(handle) = filter.seg_thread.take() {
+                                            let _ = handle.join();
+                                        }
+                                    }
+                                    Err(mpsc::TrySendError::Full(_)) => {
+                                        // Drop the frame; thread is busy.
+                                    }
+                                }
                             }
                         }
                     }
@@ -949,8 +966,30 @@ fn segmentation_thread_main(
     dylib_path: PathBuf,
     model_path: PathBuf,
 ) {
-    if let Err(err) = ort::init_from(&dylib_path).and_then(|b| Ok(b.commit())) {
-        let _ = err;
+    unsafe {
+        if let Ok(p) = CString::new(dylib_path.to_string_lossy().as_bytes()) {
+            obs::blog(
+                obs::LOG_INFO as i32,
+                cstr(b"StyledCamera: ONNX Runtime dylib: %s\n\0"),
+                p.as_ptr(),
+            );
+        }
+        if let Ok(p) = CString::new(model_path.to_string_lossy().as_bytes()) {
+            obs::blog(
+                obs::LOG_INFO as i32,
+                cstr(b"StyledCamera: segmentation model: %s\n\0"),
+                p.as_ptr(),
+            );
+        }
+    }
+
+    if ort::init_from(&dylib_path).and_then(|b| Ok(b.commit())).is_err() {
+        unsafe {
+            obs::blog(
+                obs::LOG_WARNING as i32,
+                cstr(b"StyledCamera: failed to init ONNX Runtime; segmentation disabled\n\0"),
+            );
+        }
         return;
     }
 
@@ -958,10 +997,20 @@ fn segmentation_thread_main(
         .and_then(|b| b.commit_from_file(model_path))
     {
         Ok(s) => s,
-        Err(_) => return,
+        Err(_) => {
+            unsafe {
+                obs::blog(
+                    obs::LOG_WARNING as i32,
+                    cstr(b"StyledCamera: failed to load segmentation model into ORT session\n\0"),
+                );
+            }
+            return;
+        }
     };
 
     let mut prev_mask: Vec<f32> = Vec::new();
+    let mut input_is_nchw: Option<bool> = None;
+    let mut last_infer_error_log: Option<Instant> = None;
 
     while let Ok(msg) = rx.recv() {
         let Some(input) = msg else { break };
@@ -972,37 +1021,89 @@ fn segmentation_thread_main(
             continue;
         }
 
-        let mut rgb = Vec::<f32>::with_capacity(w * h * 3);
+        // Build NHWC pixel-major input first (fast to assemble from RGBA).
+        let mut rgb_nhwc = Vec::<f32>::with_capacity(w * h * 3);
         for px in input.rgba.chunks_exact(4) {
-            rgb.push(px[0] as f32 / 255.0);
-            rgb.push(px[1] as f32 / 255.0);
-            rgb.push(px[2] as f32 / 255.0);
+            rgb_nhwc.push(px[0] as f32 / 255.0);
+            rgb_nhwc.push(px[1] as f32 / 255.0);
+            rgb_nhwc.push(px[2] as f32 / 255.0);
         }
 
-        let shape = vec![1i64, input.height as i64, input.width as i64, 3];
-        let tensor = match ort::value::Tensor::<f32>::from_array((shape, rgb.into_boxed_slice())) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-
-        let outputs = match session.run(ort::inputs![tensor]) {
-            Ok(o) => o,
-            Err(_) => continue,
-        };
-
-        let (out_shape, out_data) = match outputs[0].try_extract_tensor::<f32>() {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
         let expected = (input.width * input.height) as usize;
+
+        let mut run_and_pick_output = |shape: Vec<i64>, data: Box<[f32]>| -> Option<(Vec<i64>, Vec<f32>)> {
+            let tensor = ort::value::Tensor::<f32>::from_array((shape, data)).ok()?;
+            let outputs = session.run(ort::inputs![tensor]).ok()?;
+            for (_, v) in outputs.iter() {
+                if let Ok((shape, data)) = v.try_extract_tensor::<f32>() {
+                    if data.len() == expected || data.len() == expected * 2 || data.len() >= expected {
+                        let shape_vec: Vec<i64> = shape.iter().copied().collect();
+                        return Some((shape_vec, data.to_vec()));
+                    }
+                }
+            }
+            None
+        };
+
+        let mut try_layout = |nchw: bool| -> Option<(Vec<i64>, Vec<f32>)> {
+            if nchw {
+                let wh = w * h;
+                let mut rgb = vec![0f32; wh * 3];
+                for i in 0..wh {
+                    rgb[i] = rgb_nhwc[i * 3];
+                    rgb[wh + i] = rgb_nhwc[i * 3 + 1];
+                    rgb[wh * 2 + i] = rgb_nhwc[i * 3 + 2];
+                }
+                run_and_pick_output(vec![1i64, 3, h as i64, w as i64], rgb.into_boxed_slice())
+            } else {
+                run_and_pick_output(
+                    vec![1i64, h as i64, w as i64, 3],
+                    rgb_nhwc.clone().into_boxed_slice(),
+                )
+            }
+        };
+
+        let picked = if let Some(nchw) = input_is_nchw {
+            try_layout(nchw)
+        } else {
+            // Auto-detect once.
+            let nhwc = try_layout(false);
+            if nhwc.is_some() {
+                input_is_nchw = Some(false);
+            }
+            nhwc.or_else(|| {
+                let nchw = try_layout(true);
+                if nchw.is_some() {
+                    input_is_nchw = Some(true);
+                }
+                nchw
+            })
+        };
+
+        let Some((out_shape, out_data)) = picked else {
+            let now = Instant::now();
+            let due = last_infer_error_log
+                .map(|t| now.duration_since(t) >= Duration::from_secs(2))
+                .unwrap_or(true);
+            if due {
+                unsafe {
+                    obs::blog(
+                        obs::LOG_WARNING as i32,
+                        cstr(b"StyledCamera: segmentation inference failed (model/input mismatch?)\n\0"),
+                    );
+                }
+                last_infer_error_log = Some(now);
+            }
+            continue;
+        };
+
         let mut current: Vec<f32> = Vec::new();
 
         // Handle common MediaPipe-style outputs:
         // - [1, H, W, 1] or [1, 1, H, W] (single channel)
         // - [1, H, W, 2] or [1, 2, H, W] (2 classes: background/person)
         if out_data.len() == expected {
-            current.extend_from_slice(out_data);
+            current.extend_from_slice(&out_data);
         } else if out_data.len() == expected * 2 {
             current.resize(expected, 0.0);
             let is_nhwc_2 = out_shape.len() == 4 && out_shape[3] == 2;
@@ -1268,7 +1369,8 @@ unsafe fn init_graphics(filter: &mut StyledCameraFilter) {
     if filter.mask_tex.is_null() {
         let mask_w = 256u32;
         let mask_h = 256u32;
-        let init = vec![255u8; (mask_w * mask_h) as usize];
+        // Default to 0 (no person) until we receive real mask data.
+        let init = vec![0u8; (mask_w * mask_h) as usize];
         let mut data_ptrs = [init.as_ptr()];
         filter.mask_tex = obs::gs_texture_create(
             mask_w,
