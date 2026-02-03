@@ -53,6 +53,12 @@ unsafe fn update_numeric_property_label(property: *mut obs::obs_property_t, sett
     } else if name == SETTING_PADDING.strip_suffix(&[0]).unwrap() {
         let v = obs::obs_data_get_double(settings, cstr(SETTING_PADDING));
         format!("{}: {}", label_str(PROP_PADDING), fmt_f0(v))
+    } else if name == SETTING_FRAME_WIDTH.strip_suffix(&[0]).unwrap() {
+        let v = obs::obs_data_get_double(settings, cstr(SETTING_FRAME_WIDTH));
+        format!("{}: {}%", label_str(PROP_FRAME_WIDTH), fmt_f0(v * 100.0))
+    } else if name == SETTING_FRAME_HEIGHT.strip_suffix(&[0]).unwrap() {
+        let v = obs::obs_data_get_double(settings, cstr(SETTING_FRAME_HEIGHT));
+        format!("{}: {}%", label_str(PROP_FRAME_HEIGHT), fmt_f0(v * 100.0))
     } else if name == SETTING_BORDER_THICKNESS.strip_suffix(&[0]).unwrap() {
         let v = obs::obs_data_get_double(settings, cstr(SETTING_BORDER_THICKNESS));
         format!("{}: {}", label_str(PROP_BORDER_THICKNESS), fmt_f1(v))
@@ -90,6 +96,36 @@ unsafe extern "C" fn on_numeric_property_modified(
     true
 }
 
+unsafe extern "C" fn on_shape_type_modified(
+    props: *mut obs::obs_properties_t,
+    _property: *mut obs::obs_property_t,
+    settings: *mut obs::obs_data_t,
+) -> bool {
+    if props.is_null() || settings.is_null() {
+        return false;
+    }
+
+    let shape_type = obs::obs_data_get_int(settings, cstr(SETTING_SHAPE_TYPE));
+    let show_frame = shape_type == 1 || shape_type == 2 || shape_type == 3 || shape_type == 4;
+
+    let p_w = obs::obs_properties_get(props, cstr(SETTING_FRAME_WIDTH));
+    let p_h = obs::obs_properties_get(props, cstr(SETTING_FRAME_HEIGHT));
+    if !p_w.is_null() {
+        obs::obs_property_set_visible(p_w, show_frame);
+    }
+    if !p_h.is_null() {
+        obs::obs_property_set_visible(p_h, show_frame);
+    }
+
+    // Also refresh their labels immediately (otherwise they show the base text until modified).
+    if show_frame {
+        update_numeric_property_label(p_w, settings);
+        update_numeric_property_label(p_h, settings);
+    }
+
+    true
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct FilterSettings {
     pub blur_intensity: f32,
@@ -110,6 +146,8 @@ pub(crate) struct FilterSettings {
     pub border_thickness: f32,
     pub border_color_argb: u32,
     pub padding: f32,
+    pub frame_width: f32,
+    pub frame_height: f32,
 
     pub shadow_opacity: f32,
     pub shadow_blur: f32,
@@ -139,6 +177,8 @@ impl Default for FilterSettings {
             border_thickness: 0.0,
             border_color_argb: 0xFFFFFFFF,
             padding: 0.0,
+            frame_width: 1.0,
+            frame_height: 1.0,
 
             shadow_opacity: 0.0,
             shadow_blur: 18.0,
@@ -178,6 +218,8 @@ impl FilterSettings {
             obs::obs_data_get_double(settings, cstr(SETTING_BORDER_THICKNESS)) as f32;
         s.border_color_argb = obs::obs_data_get_int(settings, cstr(SETTING_BORDER_COLOR)) as u32;
         s.padding = obs::obs_data_get_double(settings, cstr(SETTING_PADDING)) as f32;
+        s.frame_width = obs::obs_data_get_double(settings, cstr(SETTING_FRAME_WIDTH)) as f32;
+        s.frame_height = obs::obs_data_get_double(settings, cstr(SETTING_FRAME_HEIGHT)) as f32;
 
         s.shadow_opacity = obs::obs_data_get_double(settings, cstr(SETTING_SHADOW_OPACITY)) as f32;
         s.shadow_blur = obs::obs_data_get_double(settings, cstr(SETTING_SHADOW_BLUR)) as f32;
@@ -214,6 +256,8 @@ pub(crate) unsafe fn set_defaults(settings: *mut obs::obs_data_t) {
     obs::obs_data_set_default_double(settings, cstr(SETTING_BORDER_THICKNESS), 0.0);
     obs::obs_data_set_default_int(settings, cstr(SETTING_BORDER_COLOR), 0xFFFFFFFFu32 as i64);
     obs::obs_data_set_default_double(settings, cstr(SETTING_PADDING), 0.0);
+    obs::obs_data_set_default_double(settings, cstr(SETTING_FRAME_WIDTH), 1.0);
+    obs::obs_data_set_default_double(settings, cstr(SETTING_FRAME_HEIGHT), 1.0);
 
     obs::obs_data_set_default_double(settings, cstr(SETTING_SHADOW_OPACITY), 0.0);
     obs::obs_data_set_default_double(settings, cstr(SETTING_SHADOW_BLUR), 18.0);
@@ -335,6 +379,7 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
             obs::obs_property_list_add_int(shape_list, cstr(b"Square\0"), 3);
             obs::obs_property_list_add_int(shape_list, cstr(b"Vertical rectangle\0"), 4);
         }
+        obs::obs_property_set_modified_callback(shape_list, Some(on_shape_type_modified));
 
         let p = obs::obs_properties_add_float_slider(
             shape_props,
@@ -345,6 +390,28 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
             1.0,
         );
         obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
+
+        let p = obs::obs_properties_add_float_slider(
+            shape_props,
+            cstr(SETTING_FRAME_WIDTH),
+            cstr(PROP_FRAME_WIDTH),
+            0.05,
+            1.0,
+            0.01,
+        );
+        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
+        obs::obs_property_set_visible(p, false);
+        let p = obs::obs_properties_add_float_slider(
+            shape_props,
+            cstr(SETTING_FRAME_HEIGHT),
+            cstr(PROP_FRAME_HEIGHT),
+            0.05,
+            1.0,
+            0.01,
+        );
+        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
+        obs::obs_property_set_visible(p, false);
+
         let p = obs::obs_properties_add_float_slider(
             shape_props,
             cstr(SETTING_FEATHER),

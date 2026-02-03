@@ -38,6 +38,7 @@ pub(crate) struct GraphicsState {
     pub shape_border_thickness: *mut obs::gs_eparam_t,
     pub shape_border_color: *mut obs::gs_eparam_t,
     pub shape_inset: *mut obs::gs_eparam_t,
+    pub shape_frame_scale: *mut obs::gs_eparam_t,
     pub shape_shadow_offset: *mut obs::gs_eparam_t,
     pub shape_shadow_blur: *mut obs::gs_eparam_t,
     pub shape_shadow_color: *mut obs::gs_eparam_t,
@@ -86,6 +87,7 @@ impl Default for GraphicsState {
             shape_border_thickness: std::ptr::null_mut(),
             shape_border_color: std::ptr::null_mut(),
             shape_inset: std::ptr::null_mut(),
+            shape_frame_scale: std::ptr::null_mut(),
             shape_shadow_offset: std::ptr::null_mut(),
             shape_shadow_blur: std::ptr::null_mut(),
             shape_shadow_color: std::ptr::null_mut(),
@@ -208,6 +210,8 @@ impl GraphicsState {
                     obs::gs_effect_get_param_by_name(self.effect_shape, cstr(b"border_color\0"));
                 self.shape_inset =
                     obs::gs_effect_get_param_by_name(self.effect_shape, cstr(b"inset\0"));
+                self.shape_frame_scale =
+                    obs::gs_effect_get_param_by_name(self.effect_shape, cstr(b"frame_scale\0"));
                 self.shape_shadow_offset =
                     obs::gs_effect_get_param_by_name(self.effect_shape, cstr(b"shadow_offset\0"));
                 self.shape_shadow_blur =
@@ -347,6 +351,7 @@ impl GraphicsState {
             self.shape_border_thickness = std::ptr::null_mut();
             self.shape_border_color = std::ptr::null_mut();
             self.shape_inset = std::ptr::null_mut();
+            self.shape_frame_scale = std::ptr::null_mut();
             self.shape_shadow_offset = std::ptr::null_mut();
             self.shape_shadow_blur = std::ptr::null_mut();
             self.shape_shadow_color = std::ptr::null_mut();
@@ -497,6 +502,22 @@ pub(crate) unsafe fn draw_shape_to_screen(
     if !gfx.shape_inset.is_null() {
         let p = settings.padding.max(0.0);
         set_vec4_param(gfx.shape_inset, [p, p, p, p]);
+    }
+
+    if !gfx.shape_frame_scale.is_null() {
+        let sx = settings.frame_width.clamp(0.05, 1.0);
+        let sy = settings.frame_height.clamp(0.05, 1.0);
+        // Only apply scaling for box-based shapes; circles remain fixed.
+        let (sx, sy) = if settings.shape_type == 1
+            || settings.shape_type == 2
+            || settings.shape_type == 3
+            || settings.shape_type == 4
+        {
+            (sx, sy)
+        } else {
+            (1.0, 1.0)
+        };
+        set_vec2_param(gfx.shape_frame_scale, sx, sy);
     }
 
     if !gfx.shape_shadow_offset.is_null() {

@@ -28,6 +28,7 @@ uniform texture2d image;
 uniform float2 size;
 uniform float shape_type;
 uniform float corner_radius;
+uniform float2 frame_scale;
 uniform float feather;
 uniform float border_thickness;
 uniform float4 border_color;
@@ -79,8 +80,11 @@ float sdRoundBox(float2 p, float2 b, float r)
 
 float ShapeSDF(float2 p, float2 half_size)
 {
+	float2 fs = clamp(frame_scale, float2(0.05, 0.05), float2(1.0, 1.0));
+
 	// Inscribed radius for circle/square.
 	float r = min(half_size.x, half_size.y);
+	float r_scaled = r * min(fs.x, fs.y);
 
 	// Default box size for rectangle/rounded rectangle is full.
 	float2 box_half = half_size;
@@ -98,13 +102,16 @@ float ShapeSDF(float2 p, float2 half_size)
 		}
 	}
 
+	// Apply user scaling (only used by box-based shapes; caller passes 1,1 for circle).
+	box_half *= fs;
+
 	float rr_box = min(max(corner_radius, 0.0), min(box_half.x, box_half.y));
-	float rr_square = min(max(corner_radius, 0.0), r);
+	float rr_square = min(max(corner_radius, 0.0), r_scaled);
 
 	if (shape_type < 0.5)
 		return sdCircle(p, r);
 	if (shape_type > 2.5 && shape_type < 3.5)
-		return sdRoundBox(p, float2(r, r), rr_square);
+		return sdRoundBox(p, float2(r_scaled, r_scaled), rr_square);
 	if (shape_type > 1.5 && shape_type < 2.5)
 		return sdRoundBox(p, box_half, rr_box);
 	if (shape_type > 3.5)
