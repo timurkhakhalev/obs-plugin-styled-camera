@@ -1,0 +1,62 @@
+// Minimal downsample pass for blur pipelines.
+// Inputs:
+//   image       - source texture
+//   texel_size  - 1.0 / source texture size (x = 1/width, y = 1/height)
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2 texel_size;
+
+sampler_state linear_clamp_sampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+struct VertOut {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertOut VSDefault(VertData v_in)
+{
+	VertOut v_out;
+	v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	v_out.uv  = v_in.uv;
+	return v_out;
+}
+
+float4 PSDownsample(VertOut v_in) : TARGET
+{
+	// 2x2 box filter around the target UV.
+	float2 o = texel_size * 0.5;
+	float4 c0 = image.Sample(linear_clamp_sampler, v_in.uv + float2(-o.x, -o.y));
+	float4 c1 = image.Sample(linear_clamp_sampler, v_in.uv + float2( o.x, -o.y));
+	float4 c2 = image.Sample(linear_clamp_sampler, v_in.uv + float2(-o.x,  o.y));
+	float4 c3 = image.Sample(linear_clamp_sampler, v_in.uv + float2( o.x,  o.y));
+	return (c0 + c1 + c2 + c3) * 0.25;
+}
+
+technique Downsample
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSDownsample(v_in);
+	}
+}
+
+// Compatibility alias (common convention in OBS effects).
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSDownsample(v_in);
+	}
+}

@@ -1,0 +1,11 @@
+/target
+/dist/**
+!/dist/
+!/dist/README.md
+!/dist/.gitkeep
+!/dist/macos/
+!/dist/macos/.gitkeep
+.DS_Store
+
+# Large model artifacts fetched by scripts
+/model/*.onnx

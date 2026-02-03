@@ -1,0 +1,11 @@
+[package]
+name = "styledcamera"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+obs-sys = { path = "../obs-sys" }
+ort = { version = "2.0.0-rc.11", default-features = false, features = ["load-dynamic"] }

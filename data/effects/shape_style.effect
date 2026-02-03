@@ -1,0 +1,166 @@
+// Applies SDF shape masking + border + drop shadow to an RGBA input.
+//
+// Shape types (shape_type):
+//   0 = circle (inscribed)
+//   1 = rectangle (full)
+//   2 = rounded rectangle (full; uses corner_radius)
+//   3 = square (inscribed)
+//
+// Inputs:
+//   image            - composited camera texture
+//
+// Params (pixel units unless noted):
+//   size             - render size in pixels (width, height)
+//   shape_type       - int, see above
+//   corner_radius    - rounded corner radius in px
+//   feather          - edge AA / feather in px (>= 0; 1 is a good default)
+//   border_thickness - border thickness in px
+//   border_color     - RGBA
+//   shadow_offset    - shadow offset in px (x right, y down)
+//   shadow_blur      - shadow softness in px
+//   shadow_color     - RGBA
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float2 size;
+uniform int shape_type;
+uniform float corner_radius;
+uniform float feather;
+uniform float border_thickness;
+uniform float4 border_color;
+uniform float2 shadow_offset;
+uniform float shadow_blur;
+uniform float4 shadow_color;
+
+sampler_state linear_clamp_sampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+struct VertOut {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertOut VSDefault(VertData v_in)
+{
+	VertOut v_out;
+	v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	v_out.uv  = v_in.uv;
+	return v_out;
+}
+
+float sdCircle(float2 p, float r)
+{
+	return length(p) - r;
+}
+
+float sdBox(float2 p, float2 b)
+{
+	float2 d = abs(p) - b;
+	return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+}
+
+float sdRoundBox(float2 p, float2 b, float r)
+{
+	float2 q = abs(p) - (b - r);
+	return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+float ShapeSDF(float2 p, float2 half_size)
+{
+	// Inscribed radius for circle/square.
+	float r = min(half_size.x, half_size.y);
+
+	if (shape_type == 0)
+		return sdCircle(p, r);
+	if (shape_type == 3)
+		return sdBox(p, float2(r, r));
+	if (shape_type == 2)
+		return sdRoundBox(p, half_size, max(corner_radius, 0.0));
+	return sdBox(p, half_size);
+}
+
+float AlphaFromSDF(float dist, float aa)
+{
+	// dist < 0 inside.
+	return smoothstep(aa * 0.5, -aa * 0.5, dist);
+}
+
+float4 Over(float4 dst, float4 src)
+{
+	float outA = src.a + dst.a * (1.0 - src.a);
+	float denom = max(outA, 1e-6);
+	float3 outRGB = (src.rgb * src.a + dst.rgb * dst.a * (1.0 - src.a)) / denom;
+	return float4(outRGB, outA);
+}
+
+float4 PSShapeStyle(VertOut v_in) : TARGET
+{
+	float2 safe_size = max(size, float2(1.0, 1.0));
+	float2 half_size = safe_size * 0.5;
+
+	// Pixel space centered at (0,0): [-w/2..w/2], [-h/2..h/2]
+	float2 p = (v_in.uv - 0.5) * safe_size;
+
+	float aa = max(feather, 1.0);
+	float bt = max(border_thickness, 0.0);
+
+	float dist = ShapeSDF(p, half_size);
+	float shape_a = AlphaFromSDF(dist, aa);
+
+	// Border ring (inside the shape).
+	float outer_a = AlphaFromSDF(dist, aa);
+	float inner_a = AlphaFromSDF(dist + bt, aa);
+	float border_a = saturate(outer_a - inner_a);
+
+	// Shadow: shifted copy of the shape, softened outside the edge.
+	float2 sp = p - shadow_offset;
+	float sdist = ShapeSDF(sp, half_size);
+	float sblur = max(shadow_blur, 1.0);
+	float shadow_a = saturate(1.0 - smoothstep(0.0, sblur, sdist));
+	shadow_a *= (1.0 - shape_a);
+	shadow_a *= shadow_color.a;
+
+	float4 outc = float4(0.0, 0.0, 0.0, 0.0);
+
+	// Shadow (behind).
+	outc = Over(outc, float4(shadow_color.rgb, shadow_a));
+
+	// Content (clipped by shape alpha).
+	float4 img = image.Sample(linear_clamp_sampler, v_in.uv);
+	float content_a = shape_a * img.a;
+	outc = Over(outc, float4(img.rgb, content_a));
+
+	// Border (on top).
+	float b_a = border_a * border_color.a;
+	outc = Over(outc, float4(border_color.rgb, b_a));
+
+	return outc;
+}
+
+technique ShapeStyle
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSShapeStyle(v_in);
+	}
+}
+
+// Compatibility alias (common convention in OBS effects).
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSShapeStyle(v_in);
+	}
+}

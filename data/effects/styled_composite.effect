@@ -1,0 +1,98 @@
+// Composites sharp + blurred camera using a person mask.
+// Output (typical):
+//   Out = Sharp * M + BlurBG * (1 - M)
+//
+// Inputs:
+//   image          - sharp camera texture
+//   blur_image     - blurred camera texture (same UV space)
+//   mask_image     - person mask (R channel expected)
+//
+// Params:
+//   mask_threshold - mask cutoff (0..1)
+//   mask_softness  - smoothstep width around threshold (0..1, typical 0.02..0.15)
+//   mask_invert    - 0 = normal, 1 = invert
+//   bg_dim         - dims background (0..1)
+//   bg_desat       - desaturates background (0..1)
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform texture2d blur_image;
+uniform texture2d mask_image;
+
+uniform float mask_threshold;
+uniform float mask_softness;
+uniform float mask_invert;
+uniform float bg_dim;
+uniform float bg_desat;
+
+sampler_state linear_clamp_sampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+struct VertOut {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertOut VSDefault(VertData v_in)
+{
+	VertOut v_out;
+	v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	v_out.uv  = v_in.uv;
+	return v_out;
+}
+
+float3 Desaturate(float3 c, float amount)
+{
+	float luma = dot(c, float3(0.299, 0.587, 0.114));
+	return lerp(c, luma.xxx, saturate(amount));
+}
+
+float4 PSComposite(VertOut v_in) : TARGET
+{
+	float4 sharp = image.Sample(linear_clamp_sampler, v_in.uv);
+	float4 blur  = blur_image.Sample(linear_clamp_sampler, v_in.uv);
+	float  m     = mask_image.Sample(linear_clamp_sampler, v_in.uv).r;
+
+	if (mask_invert > 0.5)
+		m = 1.0 - m;
+
+	float s = max(mask_softness, 0.0);
+	float t0 = mask_threshold - s;
+	float t1 = mask_threshold + s;
+	m = smoothstep(t0, t1, m);
+
+	float3 bg = blur.rgb;
+	bg = Desaturate(bg, bg_desat);
+	bg *= (1.0 - saturate(bg_dim));
+
+	float3 rgb = lerp(bg, sharp.rgb, m);
+	float  a   = lerp(blur.a, sharp.a, m);
+	return float4(rgb, a);
+}
+
+technique Composite
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSComposite(v_in);
+	}
+}
+
+// Compatibility alias (common convention in OBS effects).
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSComposite(v_in);
+	}
+}

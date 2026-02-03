@@ -1,0 +1,88 @@
+// Minimal separable blur pass (horizontal/vertical).
+// Inputs:
+//   image       - source texture
+//   texel_size  - 1.0 / source texture size (x = 1/width, y = 1/height)
+//   blur_radius - tap spacing in pixels (1.0 is a good default for repeated passes)
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+uniform float2 texel_size;
+uniform float blur_radius;
+
+sampler_state linear_clamp_sampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+struct VertOut {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertOut VSDefault(VertData v_in)
+{
+	VertOut v_out;
+	v_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	v_out.uv  = v_in.uv;
+	return v_out;
+}
+
+float4 Blur9Tap(float2 uv, float2 step_uv)
+{
+	// Fixed 9-tap Gaussian-ish weights (common approximation).
+	const float w0 = 0.227027;
+	const float w1 = 0.1945946;
+	const float w2 = 0.1216216;
+	const float w3 = 0.054054;
+	const float w4 = 0.016216;
+
+	float4 sum = image.Sample(linear_clamp_sampler, uv) * w0;
+	sum += image.Sample(linear_clamp_sampler, uv + step_uv * 1.0) * w1;
+	sum += image.Sample(linear_clamp_sampler, uv - step_uv * 1.0) * w1;
+	sum += image.Sample(linear_clamp_sampler, uv + step_uv * 2.0) * w2;
+	sum += image.Sample(linear_clamp_sampler, uv - step_uv * 2.0) * w2;
+	sum += image.Sample(linear_clamp_sampler, uv + step_uv * 3.0) * w3;
+	sum += image.Sample(linear_clamp_sampler, uv - step_uv * 3.0) * w3;
+	sum += image.Sample(linear_clamp_sampler, uv + step_uv * 4.0) * w4;
+	sum += image.Sample(linear_clamp_sampler, uv - step_uv * 4.0) * w4;
+	return sum;
+}
+
+float4 PSBlurH(VertOut v_in) : TARGET
+{
+	float r = max(blur_radius, 0.0);
+	float2 step_uv = float2(texel_size.x * r, 0.0);
+	return Blur9Tap(v_in.uv, step_uv);
+}
+
+float4 PSBlurV(VertOut v_in) : TARGET
+{
+	float r = max(blur_radius, 0.0);
+	float2 step_uv = float2(0.0, texel_size.y * r);
+	return Blur9Tap(v_in.uv, step_uv);
+}
+
+technique BlurH
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBlurH(v_in);
+	}
+}
+
+technique BlurV
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBlurV(v_in);
+	}
+}
+
