@@ -2,6 +2,7 @@ pub(crate) static MODULE_NAME: &[u8] = b"StyledCamera\0";
 pub(crate) static MODULE_DESCRIPTION: &[u8] =
     b"StyledCamera (Rust) - styled camera filter (skeleton)\0";
 pub(crate) static MODULE_AUTHOR: &[u8] = b"StyledCamera contributors\0";
+pub(crate) const MODULE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub(crate) static FILTER_ID: &[u8] = b"styled_camera_filter\0";
 pub(crate) static FILTER_DISPLAY_NAME: &[u8] = b"Styled Camera Filter\0";

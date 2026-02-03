@@ -2,7 +2,8 @@ use std::os::raw::c_char;
 
 use obs_sys as obs;
 
-use crate::constants::{MODULE_AUTHOR, MODULE_DESCRIPTION, MODULE_NAME};
+use crate::constants::{MODULE_AUTHOR, MODULE_DESCRIPTION, MODULE_NAME, MODULE_VERSION};
+use crate::util::cstr;
 
 #[no_mangle]
 pub unsafe extern "C" fn obs_module_ver() -> u32 {
@@ -40,10 +41,18 @@ pub unsafe extern "C" fn obs_module_author() -> *const c_char {
 
 #[no_mangle]
 pub unsafe extern "C" fn obs_module_load() -> bool {
+    let version = std::ffi::CString::new(MODULE_VERSION).unwrap_or_else(|_| {
+        // CARGO_PKG_VERSION should never contain NULs; fall back to an empty string if it does.
+        std::ffi::CString::new("").expect("empty string is always valid")
+    });
+    obs::blog(
+        obs::LOG_INFO as i32,
+        cstr(b"StyledCamera: loaded v%s\n\0"),
+        version.as_ptr(),
+    );
     crate::filter::register_sources();
     true
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn obs_module_unload() {}
-

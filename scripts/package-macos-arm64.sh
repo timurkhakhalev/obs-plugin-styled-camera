@@ -9,6 +9,7 @@ DIST_MACOS_SUBDIR_DEFAULT="macos"
 MODEL_SRC_DEFAULT="./model/mediapipe_selfie_segmentation.onnx"
 MODEL_DEST_NAME_DEFAULT="selfie_segmentation.onnx"
 EFFECTS_DIR_DEFAULT="./data/effects"
+PLUGIN_VERSION_DEFAULT=""
 
 usage() {
   cat <<'EOF'
@@ -32,16 +33,18 @@ Options:
   --model PATH                  Model file (default: ./model/mediapipe_selfie_segmentation.onnx)
   --model-dest-name NAME        Name inside the bundle (default: selfie_segmentation.onnx)
   --effects-dir PATH            Directory with .effect files (default: ./data/effects)
+  --version VER                 Plugin version for Info.plist (default: Cargo package version)
 
   --onnxruntime PATH            Path to libonnxruntime.dylib (preferred)
   --download-onnxruntime        Download ONNX Runtime dylib from GitHub releases
-  --onnxruntime-version VER     Version for download (or set ONNXRUNTIME_VERSION); if omitted, uses latest
+  --onnxruntime-version VER     Version for download (or set ONNXRUNTIME_VERSION); if omitted, uses 1.23.0
 
   --skip-zip                    Do not create the zip
 
 Environment variables:
   ONNXRUNTIME_DYLIB             Same as --onnxruntime
   ONNXRUNTIME_VERSION           Default version for --download-onnxruntime
+  PLUGIN_VERSION                Same as --version
 
 Outputs:
   dist/macos/StyledCamera.plugin
@@ -157,6 +160,7 @@ download_onnxruntime_dylib() {
 
 write_infoplist() {
   local bundle="$1"
+  local version="$2"
   local plist="${bundle}/Contents/Info.plist"
   cat >"${plist}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -178,12 +182,32 @@ write_infoplist() {
   <key>CFBundlePackageType</key>
   <string>BNDL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>${version}</string>
   <key>CFBundleVersion</key>
-  <string>0.1.0</string>
+  <string>${version}</string>
 </dict>
 </plist>
 EOF
+}
+
+resolve_cargo_package_version() {
+  local crate_name="$1"
+  cargo metadata --no-deps --format-version 1 \
+    | /usr/bin/python3 - "${crate_name}" <<'PY'
+import json
+import sys
+
+crate_name = sys.argv[1]
+data = json.load(sys.stdin)
+for pkg in data.get("packages", []):
+  if pkg.get("name") == crate_name:
+    version = pkg.get("version") or ""
+    if not version:
+      raise SystemExit(f"no version field for crate: {crate_name}")
+    print(version)
+    raise SystemExit(0)
+raise SystemExit(f"crate not found in cargo metadata: {crate_name}")
+PY
 }
 
 bundle_notice() {
@@ -239,6 +263,7 @@ model_src="${MODEL_SRC_DEFAULT}"
 model_dest_name="${MODEL_DEST_NAME_DEFAULT}"
 effects_dir="${EFFECTS_DIR_DEFAULT}"
 onnxruntime_dylib="${ONNXRUNTIME_DYLIB:-}"
+plugin_version="${PLUGIN_VERSION:-${PLUGIN_VERSION_DEFAULT}}"
 download_ort=0
 ort_version="${ONNXRUNTIME_VERSION:-}"
 skip_zip=0
@@ -251,6 +276,7 @@ while [[ $# -gt 0 ]]; do
     --model) model_src="${2:-}"; shift 2 ;;
     --model-dest-name) model_dest_name="${2:-}"; shift 2 ;;
     --effects-dir) effects_dir="${2:-}"; shift 2 ;;
+    --version) plugin_version="${2:-}"; shift 2 ;;
     --onnxruntime) onnxruntime_dylib="${2:-}"; shift 2 ;;
     --download-onnxruntime) download_ort=1; shift ;;
     --onnxruntime-version) ort_version="${2:-}"; shift 2 ;;
@@ -272,6 +298,9 @@ zip_path="${dist_root}/${PLUGIN_NAME}-macos-arm64.zip"
 
 echo "Building Rust plugin (${CRATE_NAME})..."
 require_cmd cargo
+if [[ -z "${plugin_version}" ]]; then
+  plugin_version="$(resolve_cargo_package_version "${CRATE_NAME}")"
+fi
 cargo build -p "${CRATE_NAME}" --release --target aarch64-apple-darwin
 
 crate_lib="./target/aarch64-apple-darwin/release/${CRATE_LIB_DEFAULT}"
@@ -286,7 +315,7 @@ mkdir -p "${dest_bundle}/Contents/Resources"
 cp -f "${crate_lib}" "${dest_bundle}/Contents/MacOS/${PLUGIN_NAME}"
 chmod +x "${dest_bundle}/Contents/MacOS/${PLUGIN_NAME}"
 
-write_infoplist "${dest_bundle}"
+write_infoplist "${dest_bundle}" "${plugin_version}"
 echo "BNDL????" > "${dest_bundle}/Contents/PkgInfo"
 
 echo "Bundling NOTICE.md..."

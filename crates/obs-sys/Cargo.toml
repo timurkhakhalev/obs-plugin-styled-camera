@@ -1,11 +1,11 @@
 [package]
 name = "obs-sys"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 build = "build.rs"
 links = "obs"
 publish = false
-license = "GPL-2.0-or-later"
+license.workspace = true
 description = "Unsafe OBS Studio libobs bindings (bindgen)"
 
 [lib]

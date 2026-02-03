@@ -44,7 +44,12 @@ cargo test
 
 See `PACKAGING.md`.
 
+## Versioning / releases
+
+- Single source of truth: `[workspace.package].version` in `Cargo.toml`.
+- To publish a macOS release artifact via GitHub Actions, push a tag matching that version (e.g. `v0.1.0`).
+  The workflow builds and attaches `StyledCamera-macos-arm64-vX.Y.Z.zip` to the GitHub Release.
+
 ## License
 
 GPL-2.0-or-later. See `LICENSE`.
-

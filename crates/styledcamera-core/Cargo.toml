@@ -1,9 +1,9 @@
 [package]
 name = "styledcamera-core"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 publish = false
-license = "GPL-2.0-or-later"
+license.workspace = true
 description = "Pure logic for StyledCamera (OBS plugin): mask postprocess and helpers"
 
 [lib]

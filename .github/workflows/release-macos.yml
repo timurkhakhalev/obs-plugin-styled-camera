@@ -1,0 +1,87 @@
+name: Release (macOS)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos-arm64:
+    name: Build + package (macOS arm64)
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-arm64
+
+      - name: Resolve versions
+        id: versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cargo_version="$(cargo metadata --no-deps --format-version 1 | /usr/bin/python3 -c 'import json,sys; data=json.load(sys.stdin); pkgs=data.get(\"packages\",[]); v=next((p.get(\"version\") for p in pkgs if p.get(\"name\")==\"styledcamera\"), None); assert v, \"crate not found: styledcamera\"; print(v)')"
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            if [[ "${tag}" != "v${cargo_version}" ]]; then
+              echo "Tag (${tag}) does not match Cargo version (v${cargo_version})." >&2
+              echo "Bump [workspace.package].version in Cargo.toml (and re-tag) to release." >&2
+              exit 1
+            fi
+            release_tag="${tag}"
+          else
+            release_tag="v${cargo_version}"
+          fi
+
+          echo "cargo_version=${cargo_version}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Fetch model
+        shell: bash
+        run: ./scripts/fetch-model.sh
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/package-macos-arm64.sh \
+            --download-onnxruntime \
+            --onnxruntime-version 1.23.0 \
+            --version "${{ steps.versions.outputs.cargo_version }}"
+
+      - name: Rename zip (include tag)
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="dist/StyledCamera-macos-arm64.zip"
+          dst="dist/StyledCamera-macos-arm64-${{ steps.versions.outputs.release_tag }}.zip"
+          mv "${src}" "${dst}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: StyledCamera-macos-arm64-${{ steps.versions.outputs.release_tag }}
+          path: dist/StyledCamera-macos-arm64-${{ steps.versions.outputs.release_tag }}.zip
+
+      - name: GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/StyledCamera-macos-arm64-${{ steps.versions.outputs.release_tag }}.zip
+          generate_release_notes: true

@@ -55,6 +55,9 @@ Example:
 ./scripts/package-macos-arm64.sh --download-onnxruntime
 ```
 
+By default, the bundle `Info.plist` version fields are taken from the Cargo package version (`[workspace.package].version` in `Cargo.toml`).
+Override with `--version` (or `PLUGIN_VERSION`) if you need to package a different version.
+
 Outputs:
 - `dist/macos/StyledCamera.plugin`
 - `dist/StyledCamera-macos-arm64.zip`
