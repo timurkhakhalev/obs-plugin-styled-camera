@@ -193,21 +193,8 @@ EOF
 resolve_cargo_package_version() {
   local crate_name="$1"
   cargo metadata --no-deps --format-version 1 \
-    | /usr/bin/python3 - "${crate_name}" <<'PY'
-import json
-import sys
-
-crate_name = sys.argv[1]
-data = json.load(sys.stdin)
-for pkg in data.get("packages", []):
-  if pkg.get("name") == crate_name:
-    version = pkg.get("version") or ""
-    if not version:
-      raise SystemExit(f"no version field for crate: {crate_name}")
-    print(version)
-    raise SystemExit(0)
-raise SystemExit(f"crate not found in cargo metadata: {crate_name}")
-PY
+    | /usr/bin/python3 -c 'import json,sys; crate_name=sys.argv[1]; data=json.load(sys.stdin); pkgs=data.get("packages", []); ver=next((p.get("version") for p in pkgs if p.get("name")==crate_name), None); assert ver, f"crate not found in cargo metadata: {crate_name}"; print(ver)' \
+      "${crate_name}"
 }
 
 bundle_notice() {
