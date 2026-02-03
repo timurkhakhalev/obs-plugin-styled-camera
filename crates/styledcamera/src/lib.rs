@@ -25,6 +25,8 @@ static SETTING_MASK_TEMPORAL: &[u8] = b"mask_temporal_smoothing\0";
 static SETTING_MASK_THRESHOLD: &[u8] = b"mask_threshold\0";
 static SETTING_MASK_SOFTNESS: &[u8] = b"mask_softness\0";
 static SETTING_MASK_INVERT: &[u8] = b"mask_invert\0";
+static SETTING_SYNC_VIDEO_TO_MASK: &[u8] = b"sync_video_to_mask\0";
+static SETTING_SYNC_VIDEO_EXTRA_DELAY_MS: &[u8] = b"sync_video_extra_delay_ms\0";
 static SETTING_BG_DIM: &[u8] = b"bg_dim\0";
 static SETTING_BG_DESAT: &[u8] = b"bg_desat\0";
 static SETTING_SHAPE_TYPE: &[u8] = b"shape_type\0";
@@ -46,6 +48,8 @@ static PROP_MASK_TEMPORAL: &[u8] = b"Mask temporal smoothing\0";
 static PROP_MASK_THRESHOLD: &[u8] = b"Mask threshold\0";
 static PROP_MASK_SOFTNESS: &[u8] = b"Mask softness\0";
 static PROP_MASK_INVERT: &[u8] = b"Invert mask\0";
+static PROP_SYNC_VIDEO_TO_MASK: &[u8] = b"Sync video to mask (adds delay)\0";
+static PROP_SYNC_VIDEO_EXTRA_DELAY_MS: &[u8] = b"Extra delay (ms)\0";
 static PROP_BG_DIM: &[u8] = b"Background dim\0";
 static PROP_BG_DESAT: &[u8] = b"Background desaturate\0";
 static PROP_SHAPE_TYPE: &[u8] = b"Shape\0";
@@ -61,6 +65,7 @@ static PROP_SHADOW_OFFSET_Y: &[u8] = b"Shadow offset Y\0";
 static PROP_SHADOW_COLOR: &[u8] = b"Shadow color\0";
 
 static GROUP_SEGMENTATION: &[u8] = b"group_segmentation\0";
+static GROUP_TIMING: &[u8] = b"group_timing\0";
 static GROUP_BACKGROUND: &[u8] = b"group_background\0";
 static GROUP_SHAPE: &[u8] = b"group_shape\0";
 static GROUP_BORDER: &[u8] = b"group_border\0";
@@ -68,6 +73,7 @@ static GROUP_SHADOW: &[u8] = b"group_shadow\0";
 static GROUP_DEBUG: &[u8] = b"group_debug\0";
 
 static GROUP_LABEL_SEGMENTATION: &[u8] = b"Segmentation\0";
+static GROUP_LABEL_TIMING: &[u8] = b"Timing\0";
 static GROUP_LABEL_BACKGROUND: &[u8] = b"Background\0";
 static GROUP_LABEL_SHAPE: &[u8] = b"Shape\0";
 static GROUP_LABEL_BORDER: &[u8] = b"Border\0";
@@ -96,6 +102,9 @@ struct StyledCameraFilter {
     mask_threshold: f32,
     mask_softness: f32,
     mask_invert: bool,
+    sync_video_to_mask: bool,
+    sync_video_extra_delay_ms: f32,
+    mask_latency_ema_ms: f32,
     bg_dim: f32,
     bg_desat: f32,
 
@@ -161,6 +170,14 @@ struct StyledCameraFilter {
     seg_tx: Option<SyncSender<Option<SegInput>>>,
     seg_rx: Option<Receiver<SegOutput>>,
     seg_thread: Option<thread::JoinHandle<()>>,
+
+    frame_hist: Vec<FrameHistEntry>,
+    frame_hist_next: usize,
+}
+
+struct FrameHistEntry {
+    tex: *mut obs::gs_texrender_t,
+    time: Option<Instant>,
 }
 
 unsafe fn read_settings(filter: &mut StyledCameraFilter, settings: *mut obs::obs_data_t) {
@@ -177,6 +194,9 @@ unsafe fn read_settings(filter: &mut StyledCameraFilter, settings: *mut obs::obs
     filter.mask_threshold = obs::obs_data_get_double(settings, cstr(SETTING_MASK_THRESHOLD)) as f32;
     filter.mask_softness = obs::obs_data_get_double(settings, cstr(SETTING_MASK_SOFTNESS)) as f32;
     filter.mask_invert = obs::obs_data_get_bool(settings, cstr(SETTING_MASK_INVERT));
+    filter.sync_video_to_mask = obs::obs_data_get_bool(settings, cstr(SETTING_SYNC_VIDEO_TO_MASK));
+    filter.sync_video_extra_delay_ms =
+        obs::obs_data_get_double(settings, cstr(SETTING_SYNC_VIDEO_EXTRA_DELAY_MS)) as f32;
     filter.bg_dim = obs::obs_data_get_double(settings, cstr(SETTING_BG_DIM)) as f32;
     filter.bg_desat = obs::obs_data_get_double(settings, cstr(SETTING_BG_DESAT)) as f32;
 
@@ -273,6 +293,9 @@ unsafe extern "C" fn styled_camera_filter_create(
         mask_threshold: 0.5,
         mask_softness: 0.1,
         mask_invert: false,
+        sync_video_to_mask: false,
+        sync_video_extra_delay_ms: 0.0,
+        mask_latency_ema_ms: 0.0,
         bg_dim: 0.0,
         bg_desat: 0.0,
 
@@ -338,6 +361,9 @@ unsafe extern "C" fn styled_camera_filter_create(
         seg_tx: None,
         seg_rx: None,
         seg_thread: None,
+
+        frame_hist: Vec::new(),
+        frame_hist_next: 0,
     });
     read_settings(&mut filter, settings);
 
@@ -378,6 +404,8 @@ unsafe extern "C" fn styled_camera_filter_get_defaults(settings: *mut obs::obs_d
     obs::obs_data_set_default_double(settings, cstr(SETTING_MASK_THRESHOLD), 0.5);
     obs::obs_data_set_default_double(settings, cstr(SETTING_MASK_SOFTNESS), 0.1);
     obs::obs_data_set_default_bool(settings, cstr(SETTING_MASK_INVERT), false);
+    obs::obs_data_set_default_bool(settings, cstr(SETTING_SYNC_VIDEO_TO_MASK), false);
+    obs::obs_data_set_default_double(settings, cstr(SETTING_SYNC_VIDEO_EXTRA_DELAY_MS), 0.0);
     obs::obs_data_set_default_double(settings, cstr(SETTING_BG_DIM), 0.0);
     obs::obs_data_set_default_double(settings, cstr(SETTING_BG_DESAT), 0.0);
 
@@ -411,7 +439,7 @@ unsafe extern "C" fn styled_camera_filter_get_properties(
             cstr(SETTING_MASK_FPS),
             cstr(PROP_MASK_FPS),
             1,
-            30,
+            60,
             1,
         );
         obs::obs_properties_add_float_slider(
@@ -446,6 +474,31 @@ unsafe extern "C" fn styled_camera_filter_get_properties(
             cstr(GROUP_LABEL_SEGMENTATION),
             obs::obs_group_type_OBS_GROUP_NORMAL,
             seg_props,
+        );
+    }
+
+    // Timing (mask latency vs. video)
+    let timing_props = obs::obs_properties_create();
+    if !timing_props.is_null() {
+        obs::obs_properties_add_bool(
+            timing_props,
+            cstr(SETTING_SYNC_VIDEO_TO_MASK),
+            cstr(PROP_SYNC_VIDEO_TO_MASK),
+        );
+        obs::obs_properties_add_float_slider(
+            timing_props,
+            cstr(SETTING_SYNC_VIDEO_EXTRA_DELAY_MS),
+            cstr(PROP_SYNC_VIDEO_EXTRA_DELAY_MS),
+            0.0,
+            250.0,
+            1.0,
+        );
+        obs::obs_properties_add_group(
+            props,
+            cstr(GROUP_TIMING),
+            cstr(GROUP_LABEL_TIMING),
+            obs::obs_group_type_OBS_GROUP_NORMAL,
+            timing_props,
         );
     }
 
@@ -703,6 +756,16 @@ unsafe extern "C" fn styled_camera_filter_video_render(
             if !filter.mask_tex.is_null() && out.mask.len() == (out.width * out.height) as usize {
                 obs::gs_texture_set_image(filter.mask_tex, out.mask.as_ptr(), out.width, false);
             }
+
+            // Update measured mask latency (EMA).
+            let measured_ms = out.capture_time.elapsed().as_secs_f32() * 1000.0;
+            if measured_ms.is_finite() && measured_ms >= 0.0 && measured_ms <= 2000.0 {
+                if filter.mask_latency_ema_ms <= 0.0 {
+                    filter.mask_latency_ema_ms = measured_ms;
+                } else {
+                    filter.mask_latency_ema_ms = (filter.mask_latency_ema_ms * 0.8) + (measured_ms * 0.2);
+                }
+            }
         }
     }
 
@@ -710,6 +773,11 @@ unsafe extern "C" fn styled_camera_filter_video_render(
     if render_source_to_texrender(filter.tex_full, cx, cy, target) {
         let tex_full = obs::gs_texrender_get_texture(filter.tex_full);
         if !tex_full.is_null() {
+            // Optional: keep a small history of frames so we can delay video to match mask latency.
+            push_frame_history(filter, tex_full, cx, cy);
+
+            let tex_for_comp = select_delayed_frame(filter, tex_full);
+
             // Segmentation input (fixed 256x256) + async inference request.
             if render_effect_to_texrender(
                 filter.tex_seg,
@@ -753,6 +821,7 @@ unsafe extern "C" fn styled_camera_filter_video_render(
                                     width: seg_cx,
                                     height: seg_cy,
                                     temporal_smoothing: filter.mask_temporal_smoothing,
+                                    capture_time: now,
                                 });
                                 match tx.try_send(msg) {
                                     Ok(()) => {
@@ -777,7 +846,7 @@ unsafe extern "C" fn styled_camera_filter_video_render(
             }
 
             // Blur (downsample -> blur passes). If blur_amount == 0, we keep blur_tex = sharp.
-            let mut blur_tex = tex_full;
+            let mut blur_tex = tex_for_comp;
             if blur_amount > 0.0001
                 && render_effect_to_texrender(
                     filter.tex_down,
@@ -788,10 +857,10 @@ unsafe extern "C" fn styled_camera_filter_video_render(
                     || {
                         set_vec2_param(filter.downsample_texel_size, 1.0 / (cx as f32), 1.0 / (cy as f32));
                         if !filter.downsample_image.is_null() {
-                            obs::gs_effect_set_texture(filter.downsample_image, tex_full);
+                            obs::gs_effect_set_texture(filter.downsample_image, tex_for_comp);
                         }
                     },
-                    tex_full,
+                    tex_for_comp,
                 )
             {
                 let tex_down = obs::gs_texrender_get_texture(filter.tex_down);
@@ -853,7 +922,7 @@ unsafe extern "C" fn styled_camera_filter_video_render(
                 TECH_COMPOSITE,
                 || {
                     if !filter.composite_image.is_null() {
-                        obs::gs_effect_set_texture(filter.composite_image, tex_full);
+                        obs::gs_effect_set_texture(filter.composite_image, tex_for_comp);
                     }
                     if !filter.composite_blur_image.is_null() {
                         obs::gs_effect_set_texture(filter.composite_blur_image, blur_tex);
@@ -868,7 +937,7 @@ unsafe extern "C" fn styled_camera_filter_video_render(
                     set_float_param(filter.composite_bg_dim, filter.bg_dim.clamp(0.0, 1.0));
                     set_float_param(filter.composite_bg_desat, filter.bg_desat.clamp(0.0, 1.0));
                 },
-                tex_full,
+                tex_for_comp,
             );
 
             let tex_comp = obs::gs_texrender_get_texture(filter.tex_comp);
@@ -905,12 +974,14 @@ struct SegInput {
     width: u32,
     height: u32,
     temporal_smoothing: f32,
+    capture_time: Instant,
 }
 
 struct SegOutput {
     mask: Vec<u8>,
     width: u32,
     height: u32,
+    capture_time: Instant,
 }
 
 unsafe fn ensure_segmentation_thread(filter: &mut StyledCameraFilter) {
@@ -1166,6 +1237,7 @@ fn segmentation_thread_main(
             mask: mask_u8,
             width: input.width,
             height: input.height,
+            capture_time: input.capture_time,
         });
     }
 }
@@ -1406,6 +1478,13 @@ unsafe fn destroy_graphics(filter: &mut StyledCameraFilter) {
         filter.stage_seg = std::ptr::null_mut();
     }
 
+    for entry in filter.frame_hist.drain(..) {
+        if !entry.tex.is_null() {
+            obs::gs_texrender_destroy(entry.tex);
+        }
+    }
+    filter.frame_hist_next = 0;
+
     if !filter.tex_full.is_null() {
         obs::gs_texrender_destroy(filter.tex_full);
         filter.tex_full = std::ptr::null_mut();
@@ -1449,6 +1528,94 @@ unsafe fn destroy_graphics(filter: &mut StyledCameraFilter) {
     }
 
     obs::obs_leave_graphics();
+}
+
+unsafe fn ensure_frame_history(filter: &mut StyledCameraFilter) {
+    if !filter.sync_video_to_mask {
+        return;
+    }
+    if !filter.frame_hist.is_empty() {
+        return;
+    }
+
+    // Keep this small to avoid large VRAM usage; enough for typical inference latency (tens of ms).
+    const N: usize = 8;
+    filter.frame_hist.reserve(N);
+    for _ in 0..N {
+        let tr = obs::gs_texrender_create(obs::gs_color_format_GS_RGBA, obs::gs_zstencil_format_GS_ZS_NONE);
+        filter.frame_hist.push(FrameHistEntry { tex: tr, time: None });
+    }
+    filter.frame_hist_next = 0;
+}
+
+unsafe fn push_frame_history(filter: &mut StyledCameraFilter, tex: *mut obs::gs_texture_t, cx: u32, cy: u32) {
+    if !filter.sync_video_to_mask {
+        return;
+    }
+    ensure_frame_history(filter);
+    if filter.frame_hist.is_empty() {
+        return;
+    }
+
+    let i = filter.frame_hist_next % filter.frame_hist.len();
+    filter.frame_hist_next = (i + 1) % filter.frame_hist.len();
+
+    let entry = &mut filter.frame_hist[i];
+    if entry.tex.is_null() || tex.is_null() {
+        return;
+    }
+
+    let effect = obs::obs_get_base_effect(obs::obs_base_effect_OBS_EFFECT_DEFAULT);
+    if effect.is_null() {
+        return;
+    }
+    let image_param = obs::gs_effect_get_param_by_name(effect, cstr(b"image\0"));
+    if !image_param.is_null() {
+        obs::gs_effect_set_texture(image_param, tex);
+    }
+
+    // Copy current frame into the history slot.
+    let ok = obs::gs_texrender_begin(entry.tex, cx, cy);
+    if ok {
+        let mut clear_color: obs::vec4 = std::mem::zeroed();
+        obs::gs_clear(obs::GS_CLEAR_COLOR as u32, &mut clear_color, 0.0, 0);
+        obs::gs_ortho(0.0, cx as f32, 0.0, cy as f32, -100.0, 100.0);
+        while obs::gs_effect_loop(effect, cstr(b"Draw\0")) {
+            obs::gs_draw_sprite(tex, 0, cx, cy);
+        }
+        obs::gs_texrender_end(entry.tex);
+        entry.time = Some(Instant::now());
+    }
+}
+
+unsafe fn select_delayed_frame(filter: &StyledCameraFilter, fallback: *mut obs::gs_texture_t) -> *mut obs::gs_texture_t {
+    if !filter.sync_video_to_mask || filter.frame_hist.is_empty() {
+        return fallback;
+    }
+
+    let delay_ms = (filter.mask_latency_ema_ms.max(0.0) + filter.sync_video_extra_delay_ms.max(0.0))
+        .clamp(0.0, 500.0);
+    if delay_ms <= 0.5 {
+        return fallback;
+    }
+
+    let desired = Instant::now() - Duration::from_secs_f32(delay_ms / 1000.0);
+    let mut best_tex: *mut obs::gs_texture_t = std::ptr::null_mut();
+    let mut best_dt: Option<Duration> = None;
+
+    for entry in filter.frame_hist.iter() {
+        let Some(t) = entry.time else { continue };
+        let dt = if t <= desired { desired.duration_since(t) } else { t.duration_since(desired) };
+        if best_dt.map(|b| dt < b).unwrap_or(true) {
+            let tex = obs::gs_texrender_get_texture(entry.tex);
+            if !tex.is_null() {
+                best_dt = Some(dt);
+                best_tex = tex;
+            }
+        }
+    }
+
+    if best_tex.is_null() { fallback } else { best_tex }
 }
 
 unsafe fn load_effect(file: &'static [u8]) -> *mut obs::gs_effect_t {
