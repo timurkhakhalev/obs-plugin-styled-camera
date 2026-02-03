@@ -996,20 +996,58 @@ fn segmentation_thread_main(
         };
 
         let expected = (input.width * input.height) as usize;
-        let current: &[f32] = if out_data.len() == expected {
-            out_data
-        } else if out_data.len() == expected * 1 {
-            &out_data[..expected]
+        let mut current: Vec<f32> = Vec::new();
+
+        // Handle common MediaPipe-style outputs:
+        // - [1, H, W, 1] or [1, 1, H, W] (single channel)
+        // - [1, H, W, 2] or [1, 2, H, W] (2 classes: background/person)
+        if out_data.len() == expected {
+            current.extend_from_slice(out_data);
+        } else if out_data.len() == expected * 2 {
+            current.resize(expected, 0.0);
+            let is_nhwc_2 = out_shape.len() == 4 && out_shape[3] == 2;
+            let is_nchw_2 = out_shape.len() == 4 && out_shape[1] == 2;
+
+            if is_nhwc_2 {
+                // Interleaved channels per pixel: [..., 2]
+                for i in 0..expected {
+                    current[i] = out_data[i * 2 + 1];
+                }
+            } else if is_nchw_2 {
+                // Planar channels: [1, 2, H, W]
+                current.copy_from_slice(&out_data[expected..expected * 2]);
+            } else {
+                // Fallback: assume interleaved and take channel 1.
+                for i in 0..expected {
+                    current[i] = out_data[i * 2 + 1];
+                }
+            }
         } else if out_data.len() >= expected {
-            &out_data[..expected]
+            // Fallback: take the first plane worth of values.
+            current.extend_from_slice(&out_data[..expected]);
         } else {
             let _ = out_shape;
             continue;
-        };
+        }
+
+        // Many segmentation models output logits; detect and apply sigmoid when needed.
+        let mut min_v = f32::INFINITY;
+        let mut max_v = f32::NEG_INFINITY;
+        for &v in current.iter() {
+            min_v = min_v.min(v);
+            max_v = max_v.max(v);
+        }
+        let looks_like_logits = min_v < -0.01 || max_v > 1.01;
+        if looks_like_logits {
+            for v in current.iter_mut() {
+                let x = *v;
+                *v = 1.0 / (1.0 + (-x).exp());
+            }
+        }
 
         if prev_mask.len() != expected {
             prev_mask.clear();
-            prev_mask.extend_from_slice(current);
+            prev_mask.extend_from_slice(&current);
         } else {
             let a = input.temporal_smoothing.clamp(0.0, 0.99);
             let b = 1.0 - a;
