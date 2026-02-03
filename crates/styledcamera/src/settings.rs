@@ -3,99 +3,6 @@ use obs_sys as obs;
 use crate::constants::*;
 use crate::util::cstr;
 
-fn label_str(bytes: &'static [u8]) -> &'static str {
-    let bytes = bytes.strip_suffix(&[0]).expect("label must be NUL-terminated");
-    std::str::from_utf8(bytes).expect("label must be valid UTF-8")
-}
-
-unsafe fn update_numeric_property_label(property: *mut obs::obs_property_t, settings: *mut obs::obs_data_t) {
-    if property.is_null() || settings.is_null() {
-        return;
-    }
-
-    let name = obs::obs_property_name(property);
-    if name.is_null() {
-        return;
-    }
-    let name = std::ffi::CStr::from_ptr(name).to_bytes();
-
-    let fmt_f2 = |v: f64| format!("{v:.2}");
-    let fmt_f1 = |v: f64| format!("{v:.1}");
-    let fmt_f0 = |v: f64| format!("{v:.0}");
-
-    let desc = if name == SETTING_MASK_FPS.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_int(settings, cstr(SETTING_MASK_FPS));
-        format!("{}: {v}", label_str(PROP_MASK_FPS))
-    } else if name == SETTING_MASK_TEMPORAL.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_MASK_TEMPORAL));
-        format!("{}: {}", label_str(PROP_MASK_TEMPORAL), fmt_f2(v))
-    } else if name == SETTING_MASK_THRESHOLD.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_MASK_THRESHOLD));
-        format!("{}: {}", label_str(PROP_MASK_THRESHOLD), fmt_f2(v))
-    } else if name == SETTING_MASK_SOFTNESS.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_MASK_SOFTNESS));
-        format!("{}: {}", label_str(PROP_MASK_SOFTNESS), fmt_f2(v))
-    } else if name == SETTING_BLUR_INTENSITY.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_BLUR_INTENSITY));
-        format!("{}: {}", label_str(PROP_BLUR_INTENSITY), fmt_f2(v))
-    } else if name == SETTING_BG_DIM.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_BG_DIM));
-        format!("{}: {}", label_str(PROP_BG_DIM), fmt_f2(v))
-    } else if name == SETTING_BG_DESAT.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_BG_DESAT));
-        format!("{}: {}", label_str(PROP_BG_DESAT), fmt_f2(v))
-    } else if name == SETTING_CORNER_RADIUS.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_CORNER_RADIUS));
-        format!("{}: {}", label_str(PROP_CORNER_RADIUS), fmt_f0(v))
-    } else if name == SETTING_FEATHER.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_FEATHER));
-        format!("{}: {}", label_str(PROP_FEATHER), fmt_f1(v))
-    } else if name == SETTING_PADDING.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_PADDING));
-        format!("{}: {}", label_str(PROP_PADDING), fmt_f0(v))
-    } else if name == SETTING_FRAME_WIDTH.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_FRAME_WIDTH));
-        format!("{}: {}%", label_str(PROP_FRAME_WIDTH), fmt_f0(v * 100.0))
-    } else if name == SETTING_FRAME_HEIGHT.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_FRAME_HEIGHT));
-        format!("{}: {}%", label_str(PROP_FRAME_HEIGHT), fmt_f0(v * 100.0))
-    } else if name == SETTING_BORDER_THICKNESS.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_BORDER_THICKNESS));
-        format!("{}: {}", label_str(PROP_BORDER_THICKNESS), fmt_f1(v))
-    } else if name == SETTING_SHADOW_OPACITY.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_SHADOW_OPACITY));
-        format!("{}: {}", label_str(PROP_SHADOW_OPACITY), fmt_f2(v))
-    } else if name == SETTING_SHADOW_BLUR.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_SHADOW_BLUR));
-        format!("{}: {}", label_str(PROP_SHADOW_BLUR), fmt_f1(v))
-    } else if name == SETTING_SHADOW_OFFSET_X.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_SHADOW_OFFSET_X));
-        format!("{}: {}", label_str(PROP_SHADOW_OFFSET_X), fmt_f0(v))
-    } else if name == SETTING_SHADOW_OFFSET_Y.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_double(settings, cstr(SETTING_SHADOW_OFFSET_Y));
-        format!("{}: {}", label_str(PROP_SHADOW_OFFSET_Y), fmt_f0(v))
-    } else if name == SETTING_SYNC_VIDEO_EXTRA_DELAY_MS.strip_suffix(&[0]).unwrap() {
-        let v = obs::obs_data_get_int(settings, cstr(SETTING_SYNC_VIDEO_EXTRA_DELAY_MS));
-        format!("{}: {v} ms", label_str(PROP_SYNC_VIDEO_EXTRA_DELAY_MS))
-    } else {
-        return;
-    };
-
-    if let Ok(desc) = std::ffi::CString::new(desc) {
-        obs::obs_property_set_description(property, desc.as_ptr());
-    }
-}
-
-unsafe extern "C" fn on_numeric_property_modified(
-    _props: *mut obs::obs_properties_t,
-    property: *mut obs::obs_property_t,
-    settings: *mut obs::obs_data_t,
-) -> bool {
-    update_numeric_property_label(property, settings);
-    // Force the properties UI to refresh so updated descriptions are re-read by the widget layer.
-    true
-}
-
 unsafe extern "C" fn on_shape_type_modified(
     props: *mut obs::obs_properties_t,
     _property: *mut obs::obs_property_t,
@@ -106,23 +13,19 @@ unsafe extern "C" fn on_shape_type_modified(
     }
 
     let shape_type = obs::obs_data_get_int(settings, cstr(SETTING_SHAPE_TYPE));
-    let show_frame = shape_type == 1 || shape_type == 2 || shape_type == 3 || shape_type == 4;
+    // Only Rectangle and Square expose frame bounds controls.
+    let show_frame = shape_type == 1 || shape_type == 3;
 
-    let p_w = obs::obs_properties_get(props, cstr(SETTING_FRAME_WIDTH));
-    let p_h = obs::obs_properties_get(props, cstr(SETTING_FRAME_HEIGHT));
-    if !p_w.is_null() {
-        obs::obs_property_set_visible(p_w, show_frame);
-    }
-    if !p_h.is_null() {
-        obs::obs_property_set_visible(p_h, show_frame);
-    }
+    let p_l = obs::obs_properties_get(props, cstr(SETTING_FRAME_INSET_LEFT));
+    let p_t = obs::obs_properties_get(props, cstr(SETTING_FRAME_INSET_TOP));
+    let p_r = obs::obs_properties_get(props, cstr(SETTING_FRAME_INSET_RIGHT));
+    let p_b = obs::obs_properties_get(props, cstr(SETTING_FRAME_INSET_BOTTOM));
+    if !p_l.is_null() { obs::obs_property_set_visible(p_l, show_frame); }
+    if !p_t.is_null() { obs::obs_property_set_visible(p_t, show_frame); }
+    if !p_r.is_null() { obs::obs_property_set_visible(p_r, show_frame); }
+    if !p_b.is_null() { obs::obs_property_set_visible(p_b, show_frame); }
 
-    // Also refresh their labels immediately (otherwise they show the base text until modified).
-    if show_frame {
-        update_numeric_property_label(p_w, settings);
-        update_numeric_property_label(p_h, settings);
-    }
-
+    // Visibility changes require a refresh.
     true
 }
 
@@ -146,8 +49,10 @@ pub(crate) struct FilterSettings {
     pub border_thickness: f32,
     pub border_color_argb: u32,
     pub padding: f32,
-    pub frame_width: f32,
-    pub frame_height: f32,
+    pub frame_inset_left: f32,
+    pub frame_inset_top: f32,
+    pub frame_inset_right: f32,
+    pub frame_inset_bottom: f32,
 
     pub shadow_opacity: f32,
     pub shadow_blur: f32,
@@ -177,8 +82,10 @@ impl Default for FilterSettings {
             border_thickness: 0.0,
             border_color_argb: 0xFFFFFFFF,
             padding: 0.0,
-            frame_width: 1.0,
-            frame_height: 1.0,
+            frame_inset_left: 0.0,
+            frame_inset_top: 0.0,
+            frame_inset_right: 0.0,
+            frame_inset_bottom: 0.0,
 
             shadow_opacity: 0.0,
             shadow_blur: 18.0,
@@ -218,8 +125,10 @@ impl FilterSettings {
             obs::obs_data_get_double(settings, cstr(SETTING_BORDER_THICKNESS)) as f32;
         s.border_color_argb = obs::obs_data_get_int(settings, cstr(SETTING_BORDER_COLOR)) as u32;
         s.padding = obs::obs_data_get_double(settings, cstr(SETTING_PADDING)) as f32;
-        s.frame_width = obs::obs_data_get_double(settings, cstr(SETTING_FRAME_WIDTH)) as f32;
-        s.frame_height = obs::obs_data_get_double(settings, cstr(SETTING_FRAME_HEIGHT)) as f32;
+        s.frame_inset_left = obs::obs_data_get_double(settings, cstr(SETTING_FRAME_INSET_LEFT)) as f32;
+        s.frame_inset_top = obs::obs_data_get_double(settings, cstr(SETTING_FRAME_INSET_TOP)) as f32;
+        s.frame_inset_right = obs::obs_data_get_double(settings, cstr(SETTING_FRAME_INSET_RIGHT)) as f32;
+        s.frame_inset_bottom = obs::obs_data_get_double(settings, cstr(SETTING_FRAME_INSET_BOTTOM)) as f32;
 
         s.shadow_opacity = obs::obs_data_get_double(settings, cstr(SETTING_SHADOW_OPACITY)) as f32;
         s.shadow_blur = obs::obs_data_get_double(settings, cstr(SETTING_SHADOW_BLUR)) as f32;
@@ -256,8 +165,10 @@ pub(crate) unsafe fn set_defaults(settings: *mut obs::obs_data_t) {
     obs::obs_data_set_default_double(settings, cstr(SETTING_BORDER_THICKNESS), 0.0);
     obs::obs_data_set_default_int(settings, cstr(SETTING_BORDER_COLOR), 0xFFFFFFFFu32 as i64);
     obs::obs_data_set_default_double(settings, cstr(SETTING_PADDING), 0.0);
-    obs::obs_data_set_default_double(settings, cstr(SETTING_FRAME_WIDTH), 1.0);
-    obs::obs_data_set_default_double(settings, cstr(SETTING_FRAME_HEIGHT), 1.0);
+    obs::obs_data_set_default_double(settings, cstr(SETTING_FRAME_INSET_LEFT), 0.0);
+    obs::obs_data_set_default_double(settings, cstr(SETTING_FRAME_INSET_TOP), 0.0);
+    obs::obs_data_set_default_double(settings, cstr(SETTING_FRAME_INSET_RIGHT), 0.0);
+    obs::obs_data_set_default_double(settings, cstr(SETTING_FRAME_INSET_BOTTOM), 0.0);
 
     obs::obs_data_set_default_double(settings, cstr(SETTING_SHADOW_OPACITY), 0.0);
     obs::obs_data_set_default_double(settings, cstr(SETTING_SHADOW_BLUR), 18.0);
@@ -275,7 +186,7 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
     // Segmentation
     let seg_props = obs::obs_properties_create();
     if !seg_props.is_null() {
-        let p = obs::obs_properties_add_int_slider(
+        obs::obs_properties_add_int_slider(
             seg_props,
             cstr(SETTING_MASK_FPS),
             cstr(PROP_MASK_FPS),
@@ -283,34 +194,30 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
             60,
             1,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
-        let p = obs::obs_properties_add_float_slider(
+        obs::obs_properties_add_float_slider(
             seg_props,
             cstr(SETTING_MASK_TEMPORAL),
             cstr(PROP_MASK_TEMPORAL),
             0.0,
             0.95,
-            0.01,
+            0.005,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
-        let p = obs::obs_properties_add_float_slider(
+        obs::obs_properties_add_float_slider(
             seg_props,
             cstr(SETTING_MASK_THRESHOLD),
             cstr(PROP_MASK_THRESHOLD),
             0.0,
             1.0,
-            0.01,
+            0.005,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
-        let p = obs::obs_properties_add_float_slider(
+        obs::obs_properties_add_float_slider(
             seg_props,
             cstr(SETTING_MASK_SOFTNESS),
             cstr(PROP_MASK_SOFTNESS),
             0.0,
             0.5,
-            0.01,
+            0.005,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
         obs::obs_properties_add_bool(seg_props, cstr(SETTING_MASK_INVERT), cstr(PROP_MASK_INVERT));
 
         obs::obs_properties_add_group(
@@ -325,33 +232,30 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
     // Background (blur, dim, desat)
     let bg_props = obs::obs_properties_create();
     if !bg_props.is_null() {
-        let p = obs::obs_properties_add_float_slider(
+        obs::obs_properties_add_float_slider(
             bg_props,
             cstr(SETTING_BLUR_INTENSITY),
             cstr(PROP_BLUR_INTENSITY),
             0.0,
             1.0,
-            0.01,
+            0.005,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
-        let p = obs::obs_properties_add_float_slider(
+        obs::obs_properties_add_float_slider(
             bg_props,
             cstr(SETTING_BG_DIM),
             cstr(PROP_BG_DIM),
             0.0,
             1.0,
-            0.01,
+            0.005,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
-        let p = obs::obs_properties_add_float_slider(
+        obs::obs_properties_add_float_slider(
             bg_props,
             cstr(SETTING_BG_DESAT),
             cstr(PROP_BG_DESAT),
             0.0,
             1.0,
-            0.01,
+            0.005,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
 
         obs::obs_properties_add_group(
             props,
@@ -381,7 +285,7 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
         }
         obs::obs_property_set_modified_callback(shape_list, Some(on_shape_type_modified));
 
-        let p = obs::obs_properties_add_float_slider(
+        obs::obs_properties_add_float_slider(
             shape_props,
             cstr(SETTING_CORNER_RADIUS),
             cstr(PROP_CORNER_RADIUS),
@@ -389,39 +293,53 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
             2000.0,
             1.0,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
 
         let p = obs::obs_properties_add_float_slider(
             shape_props,
-            cstr(SETTING_FRAME_WIDTH),
-            cstr(PROP_FRAME_WIDTH),
-            0.05,
+            cstr(SETTING_FRAME_INSET_LEFT),
+            cstr(PROP_FRAME_INSET_LEFT),
+            0.0,
+            2000.0,
             1.0,
-            0.01,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
         obs::obs_property_set_visible(p, false);
         let p = obs::obs_properties_add_float_slider(
             shape_props,
-            cstr(SETTING_FRAME_HEIGHT),
-            cstr(PROP_FRAME_HEIGHT),
-            0.05,
+            cstr(SETTING_FRAME_INSET_TOP),
+            cstr(PROP_FRAME_INSET_TOP),
+            0.0,
+            2000.0,
             1.0,
-            0.01,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
+        obs::obs_property_set_visible(p, false);
+        let p = obs::obs_properties_add_float_slider(
+            shape_props,
+            cstr(SETTING_FRAME_INSET_RIGHT),
+            cstr(PROP_FRAME_INSET_RIGHT),
+            0.0,
+            2000.0,
+            1.0,
+        );
+        obs::obs_property_set_visible(p, false);
+        let p = obs::obs_properties_add_float_slider(
+            shape_props,
+            cstr(SETTING_FRAME_INSET_BOTTOM),
+            cstr(PROP_FRAME_INSET_BOTTOM),
+            0.0,
+            2000.0,
+            1.0,
+        );
         obs::obs_property_set_visible(p, false);
 
-        let p = obs::obs_properties_add_float_slider(
+        obs::obs_properties_add_float_slider(
             shape_props,
             cstr(SETTING_FEATHER),
             cstr(PROP_FEATHER),
             0.0,
             32.0,
-            0.1,
+            0.05,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
-        let p = obs::obs_properties_add_float_slider(
+        obs::obs_properties_add_float_slider(
             shape_props,
             cstr(SETTING_PADDING),
             cstr(PROP_PADDING),
@@ -429,7 +347,6 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
             500.0,
             1.0,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
 
         obs::obs_properties_add_group(
             props,
@@ -443,7 +360,7 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
     // Border
     let border_props = obs::obs_properties_create();
     if !border_props.is_null() {
-        let p = obs::obs_properties_add_float_slider(
+        obs::obs_properties_add_float_slider(
             border_props,
             cstr(SETTING_BORDER_THICKNESS),
             cstr(PROP_BORDER_THICKNESS),
@@ -451,7 +368,6 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
             32.0,
             0.5,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
         obs::obs_properties_add_color_alpha(border_props, cstr(SETTING_BORDER_COLOR), cstr(PROP_BORDER_COLOR));
 
         obs::obs_properties_add_group(
@@ -466,16 +382,15 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
     // Shadow
     let shadow_props = obs::obs_properties_create();
     if !shadow_props.is_null() {
-        let p = obs::obs_properties_add_float_slider(
+        obs::obs_properties_add_float_slider(
             shadow_props,
             cstr(SETTING_SHADOW_OPACITY),
             cstr(PROP_SHADOW_OPACITY),
             0.0,
             1.0,
-            0.01,
+            0.005,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
-        let p = obs::obs_properties_add_float_slider(
+        obs::obs_properties_add_float_slider(
             shadow_props,
             cstr(SETTING_SHADOW_BLUR),
             cstr(PROP_SHADOW_BLUR),
@@ -483,8 +398,7 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
             64.0,
             0.5,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
-        let p = obs::obs_properties_add_float_slider(
+        obs::obs_properties_add_float_slider(
             shadow_props,
             cstr(SETTING_SHADOW_OFFSET_X),
             cstr(PROP_SHADOW_OFFSET_X),
@@ -492,8 +406,7 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
             200.0,
             1.0,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
-        let p = obs::obs_properties_add_float_slider(
+        obs::obs_properties_add_float_slider(
             shadow_props,
             cstr(SETTING_SHADOW_OFFSET_Y),
             cstr(PROP_SHADOW_OFFSET_Y),
@@ -501,7 +414,6 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
             200.0,
             1.0,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
         obs::obs_properties_add_color_alpha(shadow_props, cstr(SETTING_SHADOW_COLOR), cstr(PROP_SHADOW_COLOR));
 
         obs::obs_properties_add_group(
@@ -516,7 +428,7 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
     // Debug
     let debug_props = obs::obs_properties_create();
     if !debug_props.is_null() {
-        let p = obs::obs_properties_add_int(
+        obs::obs_properties_add_int(
             debug_props,
             cstr(SETTING_SYNC_VIDEO_EXTRA_DELAY_MS),
             cstr(PROP_SYNC_VIDEO_EXTRA_DELAY_MS),
@@ -524,8 +436,6 @@ pub(crate) unsafe fn get_properties() -> *mut obs::obs_properties_t {
             250,
             1,
         );
-        obs::obs_property_set_modified_callback(p, Some(on_numeric_property_modified));
-
         obs::obs_properties_add_bool(
             debug_props,
             cstr(SETTING_DEBUG_SHOW_MASK),

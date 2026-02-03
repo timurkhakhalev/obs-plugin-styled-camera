@@ -28,11 +28,11 @@ uniform texture2d image;
 uniform float2 size;
 uniform float shape_type;
 uniform float corner_radius;
-uniform float2 frame_scale;
 uniform float feather;
 uniform float border_thickness;
 uniform float4 border_color;
 uniform float4 inset;
+uniform float4 frame_inset; // (left, top, right, bottom) in px; applied to Rectangle/Square
 uniform float2 shadow_offset;
 uniform float shadow_blur;
 uniform float4 shadow_color;
@@ -80,11 +80,9 @@ float sdRoundBox(float2 p, float2 b, float r)
 
 float ShapeSDF(float2 p, float2 half_size)
 {
-	float2 fs = clamp(frame_scale, float2(0.05, 0.05), float2(1.0, 1.0));
-
 	// Inscribed radius for circle/square.
 	float r = min(half_size.x, half_size.y);
-	float r_scaled = r * min(fs.x, fs.y);
+	float r_scaled = r;
 
 	// Default box size for rectangle/rounded rectangle is full.
 	float2 box_half = half_size;
@@ -101,9 +99,6 @@ float ShapeSDF(float2 p, float2 half_size)
 			box_half = float2(half_size.x, half_size.x / ar);
 		}
 	}
-
-	// Apply user scaling (only used by box-based shapes; caller passes 1,1 for circle).
-	box_half *= fs;
 
 	float rr_box = min(max(corner_radius, 0.0), min(box_half.x, box_half.y));
 	float rr_square = min(max(corner_radius, 0.0), r_scaled);
@@ -136,15 +131,26 @@ float4 PSShapeStyle(VertOut v_in) : TARGET
 	float2 safe_size = max(size, float2(1.0, 1.0));
 	float2 inner_size = safe_size - float2(inset.x + inset.z, inset.y + inset.w);
 	inner_size = max(inner_size, float2(1.0, 1.0));
-	float2 half_size = inner_size * 0.5;
 
-	// Pixel space (full frame) centered at (0,0): [-w/2..w/2], [-h/2..h/2]
-	// We keep `p` in full-frame pixel units, but evaluate SDF using `inner_size` so the shape is inset.
-	// `uv_img` keeps aspect ratio by applying a *uniform* scale (no stretching).
-	float2 p = (v_in.uv - 0.5) * safe_size;
-	float2 scale2 = safe_size / inner_size;
-	float s = max(scale2.x, scale2.y);
-	float2 uv_img = (v_in.uv - 0.5) * s + 0.5;
+	// Frame crop (rectangle/square only). For other shapes, host passes zeros.
+	float2 frame_size = safe_size - float2(frame_inset.x + frame_inset.z, frame_inset.y + frame_inset.w);
+	frame_size = max(frame_size, float2(1.0, 1.0));
+	float2 frame_half = frame_size * 0.5;
+
+	// Shift center if crop is asymmetric.
+	float2 frame_center_offset = float2((frame_inset.x - frame_inset.z) * 0.5, (frame_inset.y - frame_inset.w) * 0.5);
+
+	float2 half_size = inner_size * 0.5;
+	float2 p = (v_in.uv - 0.5) * safe_size - frame_center_offset;
+	float2 uv_img = v_in.uv;
+
+	// Apply crop sizing for rectangle/square types.
+	if (shape_type > 0.5 && shape_type < 1.5) {
+		half_size = frame_half;
+	} else if (shape_type > 2.5 && shape_type < 3.5) {
+		float r = min(frame_half.x, frame_half.y);
+		half_size = float2(r, r);
+	}
 
 	float aa = max(feather, 0.001);
 	float bt = max(border_thickness, 0.0);
