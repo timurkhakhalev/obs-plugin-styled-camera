@@ -950,11 +950,37 @@ unsafe fn resolve_onnxruntime_dylib_path() -> Option<PathBuf> {
     if bin_path.is_null() {
         return None;
     }
-    let bin = PathBuf::from(CStr::from_ptr(bin_path).to_string_lossy().to_string());
-    let dylib = bin.join("../Frameworks/libonnxruntime.dylib");
-    if dylib.is_file() {
-        return Some(dylib);
+    let mut bin = PathBuf::from(CStr::from_ptr(bin_path).to_string_lossy().to_string());
+    // bin_path is typically a directory; if it's a file path, use its parent.
+    if bin.is_file() {
+        if let Some(parent) = bin.parent() {
+            bin = parent.to_path_buf();
+        }
     }
+
+    let frameworks = bin.join("../Frameworks");
+    let candidates = [
+        frameworks.join("libonnxruntime.dylib"),
+        frameworks.join("libonnxruntime.1.dylib"),
+    ];
+    for c in candidates {
+        if c.is_file() {
+            return Some(c);
+        }
+    }
+
+    // Fall back to any versioned name, e.g. libonnxruntime.1.23.0.dylib
+    if let Ok(rd) = std::fs::read_dir(&frameworks) {
+        for ent in rd.flatten() {
+            let p = ent.path();
+            if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                if name.starts_with("libonnxruntime") && name.ends_with(".dylib") && p.is_file() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
     None
 }
 
@@ -1190,26 +1216,26 @@ unsafe fn load_effect(file: &'static [u8]) -> *mut obs::gs_effect_t {
     // obs_module_file is a macro; use the underlying exported function.
     let module = obs::obs_current_module();
     if module.is_null() {
-        obs::blog(
-            obs::LOG_WARNING as i32,
-            cstr(b"StyledCamera: obs_current_module returned NULL\n\0"),
-        );
+        obs::blog(obs::LOG_WARNING as i32, cstr(b"StyledCamera: obs_current_module returned NULL\n\0"));
         return std::ptr::null_mut();
     }
 
     let path = obs::obs_find_module_file(module, cstr(file));
     if path.is_null() {
-        obs::blog(
-            obs::LOG_WARNING as i32,
-            cstr(b"StyledCamera: obs_find_module_file returned NULL\n\0"),
-        );
+        obs::blog(obs::LOG_WARNING as i32, cstr(b"StyledCamera: obs_find_module_file returned NULL\n\0"));
         return std::ptr::null_mut();
     }
 
     let mut error: *mut c_char = std::ptr::null_mut();
     let effect = obs::gs_effect_create_from_file(path, &mut error);
     if !error.is_null() {
-        obs::blog(obs::LOG_WARNING as i32, cstr(b"StyledCamera: effect compile error\n\0"));
+        // blog is variadic; this logs the real compiler error text into the OBS log.
+        obs::blog(
+            obs::LOG_WARNING as i32,
+            cstr(b"StyledCamera: effect compile error (%s): %s\n\0"),
+            path,
+            error,
+        );
         obs::bfree(error.cast());
     }
 
@@ -1301,7 +1327,7 @@ unsafe fn draw_shape_to_screen(filter: &StyledCameraFilter, tex: *mut obs::gs_te
         set_vec2_param(filter.shape_size, cx as f32, cy as f32);
     }
     if !filter.shape_type_param.is_null() {
-        obs::gs_effect_set_int(filter.shape_type_param, filter.shape_type);
+        obs::gs_effect_set_float(filter.shape_type_param, filter.shape_type as f32);
     }
     set_float_param(filter.shape_corner_radius, filter.corner_radius);
     set_float_param(filter.shape_feather, filter.feather);

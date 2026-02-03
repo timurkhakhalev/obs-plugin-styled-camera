@@ -24,7 +24,7 @@ uniform float4x4 ViewProj;
 uniform texture2d image;
 
 uniform float2 size;
-uniform int shape_type;
+uniform float shape_type;
 uniform float corner_radius;
 uniform float feather;
 uniform float border_thickness;
@@ -79,11 +79,11 @@ float ShapeSDF(float2 p, float2 half_size)
 	// Inscribed radius for circle/square.
 	float r = min(half_size.x, half_size.y);
 
-	if (shape_type == 0)
+	if (shape_type < 0.5)
 		return sdCircle(p, r);
-	if (shape_type == 3)
+	if (shape_type > 2.5)
 		return sdBox(p, float2(r, r));
-	if (shape_type == 2)
+	if (shape_type > 1.5 && shape_type < 2.5)
 		return sdRoundBox(p, half_size, max(corner_radius, 0.0));
 	return sdBox(p, half_size);
 }
