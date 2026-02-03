@@ -87,9 +87,9 @@ float ShapeSDF(float2 p, float2 half_size)
 	// Default box size for rectangle/rounded rectangle is full.
 	float2 box_half = half_size;
 
-	// Vertical rectangle: inscribed 9:16.
+	// Vertical rectangle: inscribed 5:8.
 	if (shape_type > 3.5) {
-		const float ar = 9.0 / 16.0; // width / height
+		const float ar = 10.0 / 16.0; // width / height
 		float cur_ar = half_size.x / max(half_size.y, 0.001);
 		if (cur_ar > ar) {
 			// Too wide: limit width.
