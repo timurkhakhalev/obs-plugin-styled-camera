@@ -86,7 +86,8 @@ unsafe extern "C" fn on_numeric_property_modified(
     settings: *mut obs::obs_data_t,
 ) -> bool {
     update_numeric_property_label(property, settings);
-    false
+    // Force the properties UI to refresh so updated descriptions are re-read by the widget layer.
+    true
 }
 
 #[derive(Clone, Copy)]
