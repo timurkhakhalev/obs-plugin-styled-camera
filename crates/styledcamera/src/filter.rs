@@ -127,6 +127,17 @@ unsafe fn maybe_request_segmentation(
         return;
     }
 
+    let now = Instant::now();
+    let interval = Duration::from_secs_f32(1.0 / (settings.mask_fps.max(1) as f32));
+    let due = filter
+        .last_mask_request
+        .map(|t| now.duration_since(t) >= interval)
+        .unwrap_or(true);
+
+    if !due {
+        return;
+    }
+
     if !render_effect_to_texrender(
         filter.graphics.tex_seg,
         SEG_SIZE,
@@ -145,17 +156,6 @@ unsafe fn maybe_request_segmentation(
         },
         tex_current,
     ) {
-        return;
-    }
-
-    let now = Instant::now();
-    let interval = Duration::from_secs_f32(1.0 / (settings.mask_fps.max(1) as f32));
-    let due = filter
-        .last_mask_request
-        .map(|t| now.duration_since(t) >= interval)
-        .unwrap_or(true);
-
-    if !due {
         return;
     }
 
